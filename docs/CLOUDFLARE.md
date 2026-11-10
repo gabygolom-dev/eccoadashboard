@@ -63,7 +63,7 @@ Crie uma Queue exclusiva **eccoa-dashboard-jobs**. Configure como consumidor o W
 - Retry delay: `120` segundos (se disponível).
 - Retentativas da plataforma: ao menos `10`.
 
-A aplicação já grava checkpoints, usa lease por execução, impede ciclos ativos duplicados e aplica retentativas com atraso. A Queue continua o processamento mesmo com o painel fechado. Cada mensagem processa uma página ou etapa. O próximo Cron também reenfileira ciclos ativos caso tenha ocorrido interrupção no envio de uma continuação. Sem a Queue, a atualização automática não está pronta.
+A aplicação já grava checkpoints, usa lease por execução, impede ciclos ativos duplicados e aplica retentativas com atraso. A Queue continua o processamento mesmo com o painel fechado. Cada mensagem processa uma etapa; durante o histórico de mensagens do CRM, agrupa até cinco etapas sequenciais para reduzir esperas e operações da fila, persistindo o checkpoint após cada etapa. Páginas de contatos mantêm uma etapa por execução para limitar o trabalho criptográfico. O próximo Cron também reenfileira ciclos ativos caso tenha ocorrido interrupção no envio de uma continuação. Sem a Queue, a atualização automática não está pronta.
 
 No Worker → Settings → Triggers, adicione Cron `*/15 * * * *`. Esse Cron dispara em UTC nos minutos 00, 15, 30 e 45, equivalente aos mesmos minutos em São Paulo. A aplicação registra datas de contato no fuso America/Sao_Paulo.
 
