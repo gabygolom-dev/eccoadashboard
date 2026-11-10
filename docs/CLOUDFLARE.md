@@ -17,7 +17,7 @@ A pasta `functions/` é implantada pelo Pages. Não publique apenas arquivos est
 
 ## 2. Banco exclusivo
 
-Em Storage & databases → D1, crie **eccoa-dashboard-db**. No console SQL do próprio banco, execute, nesta ordem, [`migrations/0001.sql`](../migrations/0001.sql) e [`migrations/0002_reach.sql`](../migrations/0002_reach.sql). Se a primeira já foi executada, aplique somente a segunda. Reexecutar é seguro (IF NOT EXISTS/INSERT OR IGNORE).
+Em Storage & databases → D1, crie **eccoa-dashboard-db**. No console SQL do próprio banco, execute, nesta ordem, as migrações [`0001.sql`](../migrations/0001.sql), [`0002_reach.sql`](../migrations/0002_reach.sql), [`0003_conversation_cache.sql`](../migrations/0003_conversation_cache.sql) e [`0004_free_plan_indexes.sql`](../migrations/0004_free_plan_indexes.sql). Aplique as que ainda faltarem; reexecutar é seguro (IF NOT EXISTS/INSERT OR IGNORE). Se o console aceitar só uma instrução por execução, execute cada instrução separadamente.
 
 No Pages → Settings → Bindings, adicione um D1 binding:
 
@@ -63,7 +63,7 @@ Crie uma Queue exclusiva **eccoa-dashboard-jobs**. Configure como consumidor o W
 - Retry delay: `120` segundos (se disponível).
 - Retentativas da plataforma: ao menos `10`.
 
-A aplicação já grava checkpoints, usa lease por execução, impede ciclos ativos duplicados e aplica retentativas com atraso. A Queue continua o processamento mesmo com o painel fechado. Cada mensagem processa uma etapa; durante o histórico de mensagens do CRM, agrupa até cinco etapas sequenciais para reduzir esperas e operações da fila, persistindo o checkpoint após cada etapa. Páginas de contatos mantêm uma etapa por execução para limitar o trabalho criptográfico. O próximo Cron também reenfileira ciclos ativos caso tenha ocorrido interrupção no envio de uma continuação. Sem a Queue, a atualização automática não está pronta.
+A aplicação já grava checkpoints, usa lease por execução, impede ciclos ativos duplicados e aplica retentativas com atraso. A Queue continua o processamento mesmo com o painel fechado. Cada mensagem processa até três etapas sequenciais, ou cinco no histórico de mensagens do CRM, persistindo o checkpoint após cada etapa. A chave de assinatura dos IDs é reutilizada em memória para limitar o trabalho criptográfico. O próximo Cron também reenfileira ciclos ativos caso tenha ocorrido interrupção no envio de uma continuação. Sem a Queue, a atualização automática não está pronta.
 
 No Worker → Settings → Triggers, adicione Cron `*/15 * * * *`. Esse Cron dispara em UTC nos minutos 00, 15, 30 e 45, equivalente aos mesmos minutos em São Paulo. A aplicação registra datas de contato no fuso America/Sao_Paulo.
 
@@ -92,7 +92,9 @@ Essas variáveis apenas identificam as conexões no painel; não concedem acesso
 
 A infraestrutura tem custos e limites da conta Cloudflare. Nenhum recurso de outro cliente deve ser renomeado, compartilhado ou reutilizado. Backups do banco contêm apenas dados minimizados; proteja o acesso administrativo.
 
-O plano gratuito tem limite de 50 consultas D1 por execução, 100 mil linhas escritas por dia e 10 mil operações de fila por dia. O importador grava cada página em uma consulta SQL com `json_each`, para respeitar o primeiro limite. Ainda assim, importar repetidamente todo o histórico de 3.596 contatos e mais de mil conversas a cada 15 minutos pode ultrapassar as cotas diárias; valide o uso real antes de considerar a operação contínua pronta. Não mude o plano nem autorize cobranças automaticamente. Referências: [limites D1](https://developers.cloudflare.com/d1/platform/limits/), [preços D1](https://developers.cloudflare.com/d1/platform/pricing/) e [preços Queues](https://developers.cloudflare.com/queues/platform/pricing/).
+O cliente escolheu manter o plano gratuito. Ele tem limite de 50 consultas D1 por execução, 100 mil linhas escritas por dia e 10 mil operações de fila por dia. A implementação usa snapshots temporários por página, confirmação apenas dos cadastros e métricas que mudaram, cache de versões de conversas e lotes limitados de processamento. Leituras de contatos sem data e de histórico usam índices específicos.
+
+Snapshots de execuções concluídas ou falhas são removidos uma hora após o término; eventos confirmados, revisões reais de métricas e histórico das execuções ficam preservados em tabelas próprias. Isso evita acumular centenas de megabytes de cópias temporárias no banco de 500 MB. A limpeza nunca remove snapshots de execução ativa. Confira uso real no D1 e na fila ao validar a produção; não mude o plano nem autorize cobranças automaticamente. Referências: [limites D1](https://developers.cloudflare.com/d1/platform/limits/), [preços D1](https://developers.cloudflare.com/d1/platform/pricing/) e [preços Queues](https://developers.cloudflare.com/queues/platform/pricing/).
 
 ## Valores confirmados para o Worker Eccoa
 

@@ -1,5 +1,5 @@
-import {all,first,run,statement,stage,stageMany,stageMissingAds} from './db.js';
-import {crmConfig,crmRead,verifyWorkspace,pageItems,projectContact,projectEvent,messagePage,projectPipelines,projectConversation} from './connectors/rugido.js';
+import {all,first,run,statement,stage,stageMany,stageMissingAds,stagePage,stagedRowsSQL} from './db.js';
+import {crmConfig,crmRead,verifyWorkspace,pageItems,projectContact,projectEvent,messagePage,projectPipelines,projectConversation,conversationNeedsScan} from './connectors/rugido.js';
 import {metaConfig,verifyMeta,adsPage,insightPage,syncRange,exactReach} from './connectors/meta.js';
 import {getPath,safeId,addDays} from './domain.js';
 export async function startCycle(env,scheduledAt=new Date().toISOString()) {
@@ -21,7 +21,9 @@ export async function startCycle(env,scheduledAt=new Date().toISOString()) {
   await env.ECCOA_DB.batch([
     statement(env.ECCOA_DB,'DELETE FROM sessions WHERE expires<?',Date.now()),
     statement(env.ECCOA_DB,'DELETE FROM attempts WHERE expires<?',Date.now()),
-    statement(env.ECCOA_DB,"DELETE FROM stage WHERE run_id IN (SELECT id FROM runs WHERE state<>'running' AND started_at<?)",new Date(Date.now()-7*86400000).toISOString())
+    // Temporary snapshots are retained for one hour after completion. Confirmed
+    // events, metric revisions and run history live in their own preserved tables.
+    statement(env.ECCOA_DB,"DELETE FROM stage WHERE run_id IN (SELECT id FROM runs WHERE state<>'running' AND finished_at<?)",new Date(Date.now()-3600000).toISOString())
   ]);
 }
 export function safeError(e) {
@@ -69,10 +71,10 @@ async function crmStep(env,job,c) {
     const p=pageItems(d,spec,c.page);
     if(c.total!==undefined&&c.total!==p.total)throw new Error('CRM_LIST_CHANGED_RETRY');
     const contacts=await Promise.all(p.items.map(raw=>projectContact(raw,spec,env.PSEUDONYM_KEY)));
-    await stageMany(db,job.id,'contact',contacts.map(contact=>({key:contact.id,data:contact})));
+    await stagePage(db,job.id,'contact',job.pages,contacts.map(contact=>({key:contact.id,data:contact})));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
-    const unique=await first(db,"SELECT count(*) n FROM stage WHERE run_id=? AND kind='contact'",job.id);
+    const unique=await first(db,`SELECT count(*) n FROM (${stagedRowsSQL('contact')})`,job.id,job.id);
     if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONTACT_COVERAGE_INCOMPLETE');
     return {phase:'conversations',page:1,count:0};
   }
@@ -84,16 +86,31 @@ async function crmStep(env,job,c) {
     const dictionaryRow=await first(db,"SELECT data FROM stage WHERE run_id=? AND kind='dictionary' AND key='stages'",job.id);
     const dictionary=dictionaryRow?JSON.parse(dictionaryRow.data):{};
     const conversations=await Promise.all(p.items.map(raw=>projectConversation(raw,spec,env.PSEUDONYM_KEY,dictionary)));
-    await stageMany(db,job.id,'conversation',conversations.map(conv=>({key:conv.id,data:{id:conv.id,contactId:conv.contactId}})));
-    await stageMany(db,job.id,'contact_stage',conversations.flatMap(conv=>conv.stages.map(current=>({key:current.contactId+':'+current.stageId,data:current}))));
+    const cached=await all(db,'SELECT conversation_id,fingerprint,full_scan_at FROM conversation_cache WHERE conversation_id IN(SELECT value FROM json_each(?))',JSON.stringify(conversations.map(conv=>conv.id)));
+    const cache=new Map(cached.map(row=>[row.conversation_id,row]));
+    // A rolling upgrade can reuse a completed legacy full scan only for
+    // conversations present in that snapshot whose operational version predates
+    // its start. Missing/new/changed markers always require message reads.
+    const missing=conversations.filter(conv=>conv.fingerprint&&!cache.has(conv.id));
+    const legacy=missing.length?await first(db,`SELECT r.id,r.started_at FROM runs r WHERE r.provider='crm' AND r.state='completed'
+      AND r.started_at>? AND r.started_at<? AND EXISTS(SELECT 1 FROM stage s WHERE s.run_id=r.id AND s.kind='conversation')
+      AND NOT EXISTS(SELECT 1 FROM stage s WHERE s.run_id=r.id AND s.kind='conversation_page') ORDER BY r.started_at DESC LIMIT 1`,new Date(Date.parse(job.started_at)-24*3600000).toISOString(),job.started_at):null;
+    const legacyIds=new Set(legacy?(await all(db,"SELECT key FROM stage WHERE run_id=? AND kind='conversation' AND key IN(SELECT value FROM json_each(?))",legacy.id,JSON.stringify(missing.map(conv=>conv.id)))).map(row=>row.key):[]);
+    const versions=conversations.map(conv=>{
+      const bootstrap=!!legacy&&legacyIds.has(conv.id)&&!cache.has(conv.id)&&!!conv.versionAt&&conv.versionAt<=legacy.started_at;
+      return {key:conv.id,data:{id:conv.id,contactId:conv.contactId,fingerprint:conv.fingerprint,needsMessages:!bootstrap&&conversationNeedsScan(cache.get(conv.id),conv.fingerprint,job.started_at),bootstrap,cacheScanAt:bootstrap?legacy.started_at:job.started_at}};
+    });
+    await stagePage(db,job.id,'conversation',job.pages,versions);
+    await stageMany(db,job.id,'conversation',versions.filter(row=>row.data.needsMessages||row.data.bootstrap));
+    await stagePage(db,job.id,'contact_stage',job.pages,conversations.flatMap(conv=>conv.stages.map(current=>({key:current.contactId+':'+current.stageId,data:current}))));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
-    const unique=await first(db,"SELECT count(*) n FROM stage WHERE run_id=? AND kind='conversation'",job.id);
+    const unique=await first(db,`SELECT count(*) n FROM (${stagedRowsSQL('conversation')})`,job.id,job.id);
     if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONVERSATION_COVERAGE_INCOMPLETE');
     return {phase:'messages',conversationAfter:'',messageCursor:null};
   }
   if(c.phase==='messages'){
-    const conv=await first(db,"SELECT key,data FROM stage WHERE run_id=? AND kind='conversation' AND key>? ORDER BY key LIMIT 1",job.id,c.conversationAfter);
+    const conv=await first(db,"SELECT key,data FROM stage WHERE run_id=? AND kind='conversation' AND key>? AND COALESCE(json_extract(data,'$.needsMessages'),1)=1 ORDER BY key LIMIT 1",job.id,c.conversationAfter);
     if(!conv)return {...c,done:true};
     const params={...(s.messages.params||{})};if(c.messageCursor)params[s.messages.cursorParam]=c.messageCursor;
     const data=await crmRead(env,`/conversations/${conv.key}/messages`,params);
@@ -123,7 +140,7 @@ async function metaStep(env,job,c){
   }
   if(c.phase==='insights'){
     const p=await insightPage(env,c.windowStart,c.windowEnd,c.after);
-    await stageMany(db,job.id,'metric',p.items.map(metric=>({key:`${metric.day}:${metric.adId}`,data:metric})));
+    await stagePage(db,job.id,'metric',job.pages,p.items.map(metric=>({key:`${metric.day}:${metric.adId}`,data:metric})));
     await stageMissingAds(db,job.id,p.items);
     if(p.next===c.after&&p.next)throw new Error('META_REPEATED_CURSOR');
     if(p.next)return {...c,after:p.next};
@@ -132,7 +149,7 @@ async function metaStep(env,job,c){
   }
   if(c.phase==='reach'){
     if(c.reachCount>=100)return {...c,done:true};
-    const request=await first(db,"SELECT * FROM reach_reports WHERE id>? AND requested_at>? AND (confirmed_at IS NULL OR confirmed_at<?) ORDER BY id LIMIT 1",c.reachAfter,new Date(Date.now()-30*86400000).toISOString(),job.started_at);
+    const request=await first(db,"SELECT * FROM reach_reports WHERE id>? AND requested_at>? AND requested_at>COALESCE(confirmed_at,'') AND (confirmed_at IS NULL OR confirmed_at<?) ORDER BY id LIMIT 1",c.reachAfter,new Date(Date.now()-30*86400000).toISOString(),job.started_at);
     if(!request)return {...c,done:true};
     let value=null,error=null;
     try{
@@ -150,22 +167,47 @@ async function metaStep(env,job,c){
 export async function publishRun(env,job,c){
   const db=env.ECCOA_DB,at=new Date().toISOString(),stmts=[];
   if(job.provider==='crm'){
-    stmts.push(statement(db,"UPDATE contacts SET stage_id=NULL,stage_name='Etapa não informada'"));
-    stmts.push(statement(db,`INSERT INTO contacts(id,stage_id,stage_name,undated,updated_at)
-      SELECT key,json_extract(data,'$.stageId'),json_extract(data,'$.stageName'),json_extract(data,'$.undated'),? FROM stage WHERE run_id=? AND kind='contact'
-      ON CONFLICT(id) DO UPDATE SET stage_id=excluded.stage_id,stage_name=excluded.stage_name,undated=excluded.undated,updated_at=excluded.updated_at`,at,job.id));
-    stmts.push(statement(db,`UPDATE contacts SET stage_id=(SELECT group_concat(DISTINCT json_extract(data,'$.stageId')) FROM stage WHERE run_id=? AND kind='contact_stage' AND json_extract(data,'$.contactId')=contacts.id),stage_name=(SELECT group_concat(DISTINCT json_extract(data,'$.stageName')) FROM stage WHERE run_id=? AND kind='contact_stage' AND json_extract(data,'$.contactId')=contacts.id) WHERE id IN (SELECT json_extract(data,'$.contactId') FROM stage WHERE run_id=? AND kind='contact_stage')`,job.id,job.id,job.id));
+    const contactRows=stagedRowsSQL('contact'),stageRows=stagedRowsSQL('contact_stage');
+    stmts.push(statement(db,`UPDATE contacts SET stage_id=NULL,stage_name='Etapa não informada'
+      WHERE (stage_id IS NOT NULL OR stage_name<>'Etapa não informada') AND id NOT IN(SELECT key FROM (${contactRows}))`,job.id,job.id));
+    stmts.push(statement(db,`WITH incoming AS (${contactRows}),stages AS (${stageRows}),
+      grouped AS (SELECT json_extract(data,'$.contactId') contact_id,group_concat(DISTINCT json_extract(data,'$.stageId')) stage_id,
+      group_concat(DISTINCT json_extract(data,'$.stageName')) stage_name FROM stages GROUP BY json_extract(data,'$.contactId'))
+      INSERT INTO contacts(id,stage_id,stage_name,undated,updated_at)
+      SELECT i.key,COALESCE(g.stage_id,json_extract(i.data,'$.stageId')),COALESCE(g.stage_name,json_extract(i.data,'$.stageName'),'Etapa não informada'),json_extract(i.data,'$.undated'),?
+      FROM incoming i LEFT JOIN grouped g ON g.contact_id=i.key WHERE true
+      ON CONFLICT(id) DO UPDATE SET stage_id=excluded.stage_id,stage_name=excluded.stage_name,undated=excluded.undated,updated_at=excluded.updated_at
+      WHERE contacts.stage_id IS NOT excluded.stage_id OR contacts.stage_name IS NOT excluded.stage_name OR contacts.undated IS NOT excluded.undated`,job.id,job.id,job.id,job.id,at));
     stmts.push(statement(db,`INSERT INTO events(id,contact_id,at,day,campaign_id,adset_id,ad_id,evidence)
       SELECT key,json_extract(data,'$.contactId'),json_extract(data,'$.at'),json_extract(data,'$.day'),json_extract(data,'$.campaignId'),json_extract(data,'$.adsetId'),json_extract(data,'$.adId'),json_extract(data,'$.evidence') FROM stage WHERE run_id=? AND kind='event'
       ON CONFLICT(id) DO NOTHING`,job.id));
     stmts.push(statement(db,`INSERT INTO contacts(id,stage_name,undated,updated_at) SELECT key,'Etapa não informada',1,? FROM stage WHERE run_id=? AND kind='undated'
-      ON CONFLICT(id) DO UPDATE SET undated=1`,at,job.id));
+      ON CONFLICT(id) DO UPDATE SET undated=1 WHERE contacts.undated<>1`,at,job.id));
+    stmts.push(statement(db,`INSERT INTO conversation_cache(conversation_id,fingerprint,full_scan_at)
+      SELECT key,json_extract(data,'$.fingerprint'),COALESCE(json_extract(data,'$.cacheScanAt'),(SELECT started_at FROM runs WHERE id=?)) FROM stage WHERE run_id=? AND kind='conversation'
+      AND json_extract(data,'$.fingerprint') IS NOT NULL AND (json_extract(data,'$.needsMessages')=1 OR json_extract(data,'$.bootstrap')=1)
+      ON CONFLICT(conversation_id) DO UPDATE SET fingerprint=excluded.fingerprint,full_scan_at=excluded.full_scan_at`,job.id,job.id));
   }else{
-    stmts.push(statement(db,`INSERT INTO ads(id,data) SELECT key,data FROM stage WHERE run_id=? AND kind='ad' ON CONFLICT(id) DO UPDATE SET data=excluded.data`,job.id));
+    const metricRows=stagedRowsSQL('metric');
+    stmts.push(statement(db,`INSERT INTO ads(id,data) SELECT key,data FROM stage WHERE run_id=? AND kind='ad' ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE ads.data IS NOT excluded.data`,job.id));
     stmts.push(statement(db,`UPDATE reach_reports SET value=COALESCE((SELECT json_extract(data,'$.value') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id),value),confirmed_at=CASE WHEN (SELECT json_extract(data,'$.value') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id) IS NOT NULL THEN ? ELSE confirmed_at END,error=(SELECT json_extract(data,'$.error') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id) WHERE id IN(SELECT key FROM stage WHERE run_id=? AND kind='reach')`,job.id,job.id,at,job.id,job.id));
-    stmts.push(statement(db,'DELETE FROM metrics WHERE day BETWEEN ? AND ?',c.start,c.end));
-    stmts.push(statement(db,`INSERT INTO metrics(day,ad_id,campaign_id,adset_id,data,run_id) SELECT json_extract(data,'$.day'),json_extract(data,'$.adId'),json_extract(data,'$.campaignId'),json_extract(data,'$.adsetId'),data,? FROM stage WHERE run_id=? AND kind='metric'`,job.id,job.id));
-    stmts.push(statement(db,`INSERT INTO metric_revisions(run_id,day,ad_id,data,confirmed_at) SELECT ?,json_extract(data,'$.day'),json_extract(data,'$.adId'),data,? FROM stage WHERE run_id=? AND kind='metric' ON CONFLICT DO NOTHING`,job.id,at,job.id));
+    stmts.push(statement(db,`WITH incoming AS (${metricRows})
+      INSERT INTO metric_revisions(run_id,day,ad_id,data,confirmed_at)
+      SELECT ?,json_extract(i.data,'$.day'),json_extract(i.data,'$.adId'),i.data,? FROM incoming i
+      LEFT JOIN metrics m ON m.day=json_extract(i.data,'$.day') AND m.ad_id=json_extract(i.data,'$.adId')
+      WHERE m.ad_id IS NULL OR m.data IS NOT i.data ON CONFLICT DO NOTHING`,job.id,job.id,job.id,at));
+    stmts.push(statement(db,`WITH incoming AS (${metricRows})
+      INSERT INTO metric_revisions(run_id,day,ad_id,data,confirmed_at)
+      SELECT ?,m.day,m.ad_id,json_object('deleted',json('true')),? FROM metrics m
+      WHERE m.day BETWEEN ? AND ? AND (m.day,m.ad_id) NOT IN(SELECT json_extract(data,'$.day'),json_extract(data,'$.adId') FROM incoming)
+      ON CONFLICT DO NOTHING`,job.id,job.id,job.id,at,c.start,c.end));
+    stmts.push(statement(db,`WITH incoming AS (${metricRows}) DELETE FROM metrics
+      WHERE day BETWEEN ? AND ? AND (day,ad_id) NOT IN(SELECT json_extract(data,'$.day'),json_extract(data,'$.adId') FROM incoming)`,job.id,job.id,c.start,c.end));
+    stmts.push(statement(db,`WITH incoming AS (${metricRows})
+      INSERT INTO metrics(day,ad_id,campaign_id,adset_id,data,run_id)
+      SELECT json_extract(data,'$.day'),json_extract(data,'$.adId'),json_extract(data,'$.campaignId'),json_extract(data,'$.adsetId'),data,? FROM incoming WHERE true
+      ON CONFLICT(day,ad_id) DO UPDATE SET campaign_id=excluded.campaign_id,adset_id=excluded.adset_id,data=excluded.data,run_id=excluded.run_id
+      WHERE metrics.data IS NOT excluded.data`,job.id,job.id,job.id));
     // One recursive insert, keeping large historical backfills within D1 batch limits.
     stmts.push(statement(db,`WITH RECURSIVE days(day) AS (SELECT ? UNION ALL SELECT date(day,'+1 day') FROM days WHERE day<?)
       INSERT INTO meta_coverage(day,confirmed_at) SELECT day,? FROM days WHERE true ON CONFLICT(day) DO UPDATE SET confirmed_at=excluded.confirmed_at`,c.start,c.end,at));

@@ -6,6 +6,27 @@ export async function stage(db,runId,kind,key,data) {
   await run(db,'INSERT INTO stage(run_id,kind,key,data) VALUES(?,?,?,?) ON CONFLICT(run_id,kind,key) DO UPDATE SET data=excluded.data',runId,kind,key,JSON.stringify(data));
 }
 
+const snapshotKinds=new Set(['contact','contact_stage','conversation','metric']);
+export async function stagePage(db,runId,kind,sequence,items){
+  if(!snapshotKinds.has(kind)||!Number.isSafeInteger(sequence)||sequence<0)throw new Error('STAGE_PAGE_CONFIGURATION');
+  await stage(db,runId,kind+'_page',String(sequence).padStart(10,'0'),items);
+}
+// Read old item snapshots and compact page snapshots during rolling upgrades.
+// Later pages win by sequence; paid flags are unioned across duplicate contacts.
+export function stagedRowsSQL(kind){
+  if(!snapshotKinds.has(kind))throw new Error('STAGE_KIND_BLOCKED');
+  const data=kind==='contact'?"json_set(data,'$.undated',MAX(COALESCE(json_extract(data,'$.undated'),0)) OVER(PARTITION BY key))":'data';
+  return `SELECT key,data FROM (
+    SELECT key,${data} data,ROW_NUMBER() OVER(PARTITION BY key ORDER BY representation DESC,page_key DESC) version_rank
+    FROM (
+      SELECT key,data,0 representation,'' page_key FROM stage WHERE run_id=? AND kind='${kind}'
+      UNION ALL
+      SELECT json_extract(item.value,'$.key'),json_extract(item.value,'$.data'),1,s.key
+      FROM stage s,json_each(s.data) item WHERE s.run_id=? AND s.kind='${kind}_page'
+    )
+  ) WHERE version_rank=1`;
+}
+
 export async function stageMany(db,runId,kind,items) {
   // One SQL query per bounded page, rather than one per item. A 100-contact
   // page otherwise exceeds the Free-plan limit of 50 D1 queries per invocation.

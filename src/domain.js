@@ -60,8 +60,16 @@ export function timestamp(value, unit='iso') {
 export async function digest(value) {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value)))].map(x=>x.toString(16).padStart(2,'0')).join('');
 }
+const pseudonymKeyCache=new Map();
 export async function pseudonym(key,value) {
   if (!key || key.length<32) throw new Error('PSEUDONYM_KEY_REQUIRED');
-  const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(key),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+  let pending=pseudonymKeyCache.get(key);
+  if(!pending){
+    pending=crypto.subtle.importKey('raw',new TextEncoder().encode(key),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+    // One exclusive client's non-extractable key in memory, never persisted.
+    // Cache the promise before awaiting so concurrent contact pages share it.
+    pseudonymKeyCache.clear();pseudonymKeyCache.set(key,pending);
+  }
+  const k=await pending;
   return [...new Uint8Array(await crypto.subtle.sign('HMAC',k,new TextEncoder().encode(String(value))))].map(x=>x.toString(16).padStart(2,'0')).join('');
 }

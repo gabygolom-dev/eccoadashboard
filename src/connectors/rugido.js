@@ -1,6 +1,6 @@
 import {readJSON} from './http.js';
 import {RUGIDO_SCHEMA} from './rugido-schema.js';
-import {getPath,safeId,timestamp,daySP,pseudonym} from '../domain.js';
+import {getPath,safeId,timestamp,daySP,pseudonym,digest} from '../domain.js';
 const ORIGIN='https://clientcrm-api.rugido.com';
 // Field paths MUST be confirmed against a real, authorized Eccoa response.
 export function crmConfig(env) {
@@ -103,5 +103,23 @@ export async function projectConversation(raw,s,key,dictionary){
     if(!stage||stage.pipelineId!==pipeline.id)throw new Error('CRM_CURRENT_STAGE_MISMATCH');
     stages.push({contactId,stageId:stage.id,stageName:stage.pipelineName+' · '+stage.name});
   }
-  return {id,contactId,stages};
+  return {id,contactId,stages,...await conversationVersion(raw)};
+}
+
+async function conversationVersion(raw){
+  const missing={fingerprint:null,versionAt:null};
+  if(!Object.hasOwn(raw,'last_non_activity_message'))return missing;
+  const parse=value=>timestamp(value,typeof value==='number'||/^\d+(?:\.\d+)?$/.test(String(value||''))?'seconds':'iso');
+  const updated=parse(raw.updated_at),activity=parse(raw.last_activity_at);
+  const last=raw.last_non_activity_message;
+  if(!updated||!activity||(last!==null&&!safeId(last?.id)))return missing;
+  // Keep only a hash of operational version markers, never message content.
+  const latestMessage=last?parse(last.created_at):null;
+  if(last&&Object.hasOwn(last,'created_at')&&last.created_at!==null&&!latestMessage)return missing;
+  return {fingerprint:await digest(JSON.stringify([updated,activity,last?.id||null])),versionAt:[updated,activity,latestMessage].filter(Boolean).sort().at(-1)};
+}
+export function conversationNeedsScan(cached,fingerprint,startedAt){
+  if(!fingerprint||cached?.fingerprint!==fingerprint)return true;
+  const age=Date.parse(startedAt)-Date.parse(cached?.full_scan_at);
+  return !Number.isFinite(age)||age<0||age>=24*3600000;
 }
