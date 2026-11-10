@@ -11,7 +11,7 @@
 
 - `CRM_TOKEN`: credencial Rugido necessária, com leitura do workspace Eccoa.
 - `META_TOKEN`: credencial com leitura da conta Eccoa.
-- `PSEUDONYM_KEY`: mesma chave exclusiva do Pages.
+- `PSEUDONYM_KEY`: chave exclusiva Eccoa para pseudonimização de contatos e eventos, preservada entre importações. Pode ser diferente da chave do Pages, usada somente para as tentativas de login.
 - `CRM_SCHEMA_JSON`: override opcional do contrato. O schema validado de Eccoa já vem em `src/connectors/rugido-schema.js`, sem credencial nem dados de pacientes. Deixe o override ausente na configuração normal.
 
 ## Variáveis no Worker

@@ -57,3 +57,14 @@ Essas conferências locais não comprovam instalação dos secrets, execução d
 Em produção foram observadas respostas 404 em `/login.css` e `/assets/eccoa.png`, apesar dos arquivos presentes em `public/` e `dist/`. O build passou a espelhar apenas os arquivos públicos na raiz, mantendo a saída recomendada `dist/`, para compatibilidade com o diretório estático usado pelo projeto Pages.
 
 CSS, tipografia local e logos têm uma lista explícita de rotas públicas, sem depender de cookie. APIs, páginas do painel, JavaScript privado e arquivos de código/configuração continuam protegidos. Nenhum token ou dado de contatos foi adicionado aos arquivos estáticos.
+
+## Preparação da primeira importação na Cloudflare — 10/11/2026
+
+- Revalidado por GET o workspace Eccoa: 3.596 contatos únicos em 40 páginas, com 283 linhas repetidas tratadas pela deduplicação. Esse total de cadastros não equivale ao indicador de contatos pagos no período.
+- Revalidada a conta Meta fixa `1299657228271057`, nome `ECCOA Saúde`, moeda BRL, fuso `America/Sao_Paulo` e versão v26.0. Os 38 anúncios foram paginados; três referências de anúncio do CRM corresponderam à conta autorizada.
+- Conferidos Hoje (10/11), Ontem (09/11), últimos 30 dias (12/10–10/11) e intervalo personalizado (01/11–09/11). Investimento, impressões, cliques e conversas somados por anúncio/data reconciliaram com o relatório da conta; alcance veio dos relatórios de escopo exato. Atribuição retornada: `1d_view_7d_click`.
+- Criada a fila exclusiva `eccoa-dashboard-jobs`, ID `1d404652e656446a9a174b49235c49ac`. Criado, após autorização específica do usuário, o Worker `eccoa-dashboard-sync` e substituído o modelo inicial pelo importador. A URL HTTP do Worker retornou 404 e a mensagem de ausência de acesso HTTP, conforme esperado.
+- Configuradas em produção nove variáveis não secretas de identificação e restrição de escopo. Tokens ainda não configurados e banco/fila ainda não vinculados ao Worker nesta etapa. O banco não tinha atualização confirmada de CRM ou Meta.
+- Corrigida a gravação de páginas com `json_each`: uma página de 100 contatos e uma de 250 insights já não exigem centenas de consultas D1. Teste específico impõe o limite de 50 consultas e verifica deduplicação e preservação dos metadados dos anúncios. Total de 26 testes aprovados, além de verificação de sintaxe e transporte GET.
+
+Essas verificações não comprovam a primeira importação publicada nem o ciclo automático. A conexão do novo Worker às fontes e ao banco aguarda confirmação específica de concessão de acesso. Os limites do plano gratuito precisam ser avaliados para a operação contínua; nenhuma mudança de plano ou cobrança foi autorizada.

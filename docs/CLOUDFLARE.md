@@ -35,7 +35,7 @@ No Pages → Settings → Variables and Secrets, configure como **secrets cripto
 
 A senha deve ter pelo menos 9 caracteres, conforme a configuração solicitada pelo cliente. O script local `scripts/password-record.mjs` lê somente `dashboardPassword` de um JSON protegido fora do repositório. Em um terminal privado no macOS, use `node scripts/password-record.mjs /caminho/protegido/eccoa.json | pbcopy`, depois cole em `PASSWORD_RECORD`. Não inclua senha na linha de comando nem imprima o arquivo protegido.
 
-A chave `PSEUDONYM_KEY` deve ser a MESMA no Pages e no Worker. Não a rotacione sem um plano de migração dos IDs históricos. Ela não pode ser reutilizada de outro cliente. Não é necessário colocar os tokens Meta/Rugido no Pages: somente o Worker precisa deles.
+No Worker, `PSEUDONYM_KEY` gera os IDs pseudonimizados dos contatos e eventos. Preserve essa chave após a primeira importação; não a rotacione sem um plano de migração dos IDs históricos. No Pages, a variável de mesmo nome serve à limitação de tentativas de login e pode ter uma chave independente: o Pages consulta os IDs já preparados pelo Worker, sem recalculá-los. As duas chaves devem ser exclusivas Eccoa. Não é necessário colocar os tokens Meta/Rugido no Pages: somente o Worker precisa deles.
 
 Sem os bindings e secrets, a tela de login mostra “Acesso em configuração” e os dados permanecem bloqueados.
 
@@ -91,6 +91,8 @@ Essas variáveis apenas identificam as conexões no painel; não concedem acesso
 8. Anote URL real, commit, horários confirmados e limitações em `VALIDACAO.md`.
 
 A infraestrutura tem custos e limites da conta Cloudflare. Nenhum recurso de outro cliente deve ser renomeado, compartilhado ou reutilizado. Backups do banco contêm apenas dados minimizados; proteja o acesso administrativo.
+
+O plano gratuito tem limite de 50 consultas D1 por execução, 100 mil linhas escritas por dia e 10 mil operações de fila por dia. O importador grava cada página em uma consulta SQL com `json_each`, para respeitar o primeiro limite. Ainda assim, importar repetidamente todo o histórico de 3.596 contatos e mais de mil conversas a cada 15 minutos pode ultrapassar as cotas diárias; valide o uso real antes de considerar a operação contínua pronta. Não mude o plano nem autorize cobranças automaticamente. Referências: [limites D1](https://developers.cloudflare.com/d1/platform/limits/), [preços D1](https://developers.cloudflare.com/d1/platform/pricing/) e [preços Queues](https://developers.cloudflare.com/queues/platform/pricing/).
 
 ## Valores confirmados para o Worker Eccoa
 
