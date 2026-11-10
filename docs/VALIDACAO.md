@@ -48,7 +48,7 @@ Paginação de anúncios e insights exercitada com páginas pequenas; totais di�
 
 Login, carregamento da logo e logout com redirecionamento e revogação de sessão também conferidos no navegador local. A política de referrer permite origem nas submissões dentro do próprio site, mantendo o bloqueio de formulários de origem externa.
 
-Logo Eccoa copiada integralmente do arquivo enviado para `public/assets/eccoa.png`, sem distorção; aparece no cabeçalho e no login. As credenciais não foram incluídas em arquivos versionados, HTML ou artefatos de publicação.
+Símbolo Eccoa preparado a partir do print de perfil enviado, com remoção do círculo azul e das bordas do print. O PNG transparente em `public/assets/eccoa.png` preserva a proporção do símbolo e aparece no menu, cabeçalho e login. Detalhes da edição em `docs/LOGO-ECCOA.md`. As credenciais não foram incluídas em arquivos versionados, HTML ou artefatos de publicação.
 
 Essas conferências locais não comprovam instalação dos secrets, execução do Cron, login ou publicação funcional na Cloudflare. O usuário informou que ainda configurará os recursos pelo guia.
 

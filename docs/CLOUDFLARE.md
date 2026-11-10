@@ -75,7 +75,7 @@ Desative logs de conteúdo das requisições/respostas e não ative captura de m
 - `CRM_WORKSPACE_NAME=Eccoa Saúde`: nome exato validado do workspace Eccoa.
 - `META_ACCOUNT_ID=1299657228271057`: conta Eccoa validada.
 - `META_API_VERSION=v26.0`: versão confirmada no SDK oficial e nas respostas reais.
-- As duas logos oficiais já estão nos arquivos publicados, com proporção preservada: `public/assets/rugido-simbolo-oficial.png` e `public/assets/eccoa.png`. Não é necessário configurar `BRANDS_READY`; essa variável foi dispensada. A logo Eccoa também aparece na tela de login.
+- As marcas já estão nos arquivos publicados, com proporção preservada: `public/assets/rugido-simbolo-oficial.png` e `public/assets/eccoa.png`. O símbolo Eccoa foi preparado a partir do print fornecido, removendo o fundo azul do perfil. Não é necessário configurar `BRANDS_READY`; essa variável foi dispensada. A logo Eccoa também aparece na tela de login.
 
 Essas variáveis apenas identificam as conexões no painel; não concedem acesso às APIs.
 
