@@ -10,6 +10,8 @@ Conferência em 10/11/2026, no fuso `America/Sao_Paulo`. Painel real: [eccoadash
 - Primeira confirmação CRM: **10:42:40**. Primeiro ciclo com reaproveitamento de histórico confirmado às **10:47:24**, reutilizando 1.096 conversas estáveis e consultando oito alteradas. Novos eventos e contatos continuaram chegando nos ciclos posteriores.
 - Às **16:03:50**, o CRM acumulava 22 ciclos concluídos; às **16:01:17**, a Meta acumulava 26. Ambas as fontes estavam sem erro e sem execução concorrente ativa. Esses horários são uma fotografia da validação; os horários atuais aparecem no painel.
 
+O ciclo automático das **16:15:32** também concluiu na versão otimizada: **Meta às 16:16:08 (27 ciclos)** e **CRM às 16:18:21 (23 ciclos)**, ambas sem erro. Worker ativo `3281c378`, sem problemas apontados no editor. Relatório otimizado publicado pelo GitHub no commit `d3027d0`, com checks de testes e Cloudflare Pages aprovados. Próximo quarto de hora previsto: 16:30; o agendamento já havia sido comprovado por disparos reais sucessivos.
+
 ## Fontes, cobertura e privacidade
 
 Workspace CRM `503dc93f-7b19-408b-b714-63e508ede833`, nome **Eccoa Saúde**, validado antes da importação. Listagem inicial de 3.596 contatos únicos em 40 páginas; 283 linhas repetidas foram deduplicadas. Conversas e mensagens foram paginadas até o fim. Etapas vieram do dicionário real de pipelines. O total de cadastros não equivale aos contatos pagos do período.
