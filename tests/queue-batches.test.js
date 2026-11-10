@@ -33,7 +33,7 @@ test('páginas de listagem têm lote menor e falha no envio permite retry do che
  const {db,env,sent}=await setup('contacts');let steps=0;
  try{
   const step=async(local,job)=>{steps++;await local.ECCOA_JOBS.send(job);};
-  await processQueueJob(env,body,step);assert.equal(steps,3);assert.equal(sent.length,1);
+  await processQueueJob(env,body,step);assert.equal(steps,4);assert.equal(sent.length,1);
   env.ECCOA_JOBS.send=async()=>{throw Error('QUEUE_UNAVAILABLE');};
   await assert.rejects(()=>processQueueJob(env,body,step),/QUEUE_UNAVAILABLE/);
   assert.equal((await db.prepare('SELECT state FROM runs WHERE id=?').bind(body.runId).first()).state,'running');

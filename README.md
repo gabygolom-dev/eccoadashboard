@@ -27,7 +27,7 @@ Use Node 22+. `npm run dev` serve uma prévia local em `http://localhost:8787/__
 
 - [Configuração Cloudflare passo a passo](docs/CLOUDFLARE.md).
 - [Contrato das integrações e renovação dos tokens](docs/INTEGRACOES.md).
-- [Validação e pendências](docs/VALIDACAO.md).
+- [Validação em produção](docs/VALIDACAO.md).
 - [Migração D1 básica](migrations/0001.sql).
 - [Migração do cache de alcance](migrations/0002_reach.sql).
 - [Migração do cache de conversas](migrations/0003_conversation_cache.sql).

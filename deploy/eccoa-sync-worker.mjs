@@ -255,7 +255,7 @@ async function projectEvent(raw,s,key,context={}) {
   if(!at)return {undatedContact:contact};
   const external=s.externalId?getPath(raw,s.externalId):null;
   const eventKey=typeof external==='string'&&external.length>0&&external.length<=2048?`external:${contact}:${external}`:`message:${id}`;
-  return {id:await pseudonym(key,eventKey),contactId:contact,at,day:daySP(at),campaignId,adsetId,adId,evidence:'Mensagem recebida com referência paga'};
+  return {id:await pseudonym(key,eventKey),contactId:contact,at,day:daySP(new Date(at)),campaignId,adsetId,adId,evidence:'Mensagem recebida com referência paga'};
 }
 function messagePage(data,s) {
   const items=getPath(data,s.items);
@@ -627,7 +627,7 @@ async function processQueueJob(env,body,step=processJob){
   if(!['crm','meta'].includes(body?.provider)||!/^[\da-f-]{36}$/.test(body?.runId||''))return;
   const current=await first(env.ECCOA_DB,"SELECT cursor_json FROM runs WHERE id=? AND provider=? AND state='running'",body.runId,body.provider);
   if(!current)return;
-  const limit=body.provider==='crm'&&JSON.parse(current.cursor_json).phase==='messages'?5:3;
+  const limit=body.provider==='crm'&&JSON.parse(current.cursor_json).phase==='messages'?5:4;
   let next=body,pending=null;
   const localEnv={...env,ECCOA_JOBS:{async send(job,options){
     if(!options&&job.runId===body.runId&&job.provider===body.provider){pending=job;return;}

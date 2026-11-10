@@ -63,7 +63,7 @@ export async function projectEvent(raw,s,key,context={}) {
   if(!at)return {undatedContact:contact};
   const external=s.externalId?getPath(raw,s.externalId):null;
   const eventKey=typeof external==='string'&&external.length>0&&external.length<=2048?`external:${contact}:${external}`:`message:${id}`;
-  return {id:await pseudonym(key,eventKey),contactId:contact,at,day:daySP(at),campaignId,adsetId,adId,evidence:'Mensagem recebida com referência paga'};
+  return {id:await pseudonym(key,eventKey),contactId:contact,at,day:daySP(new Date(at)),campaignId,adsetId,adId,evidence:'Mensagem recebida com referência paga'};
 }
 export function messagePage(data,s) {
   const items=getPath(data,s.items);

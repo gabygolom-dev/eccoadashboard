@@ -7,7 +7,7 @@ export async function processQueueJob(env,body,step=processJob){
   if(!['crm','meta'].includes(body?.provider)||!/^[\da-f-]{36}$/.test(body?.runId||''))return;
   const current=await first(env.ECCOA_DB,"SELECT cursor_json FROM runs WHERE id=? AND provider=? AND state='running'",body.runId,body.provider);
   if(!current)return;
-  const limit=body.provider==='crm'&&JSON.parse(current.cursor_json).phase==='messages'?5:3;
+  const limit=body.provider==='crm'&&JSON.parse(current.cursor_json).phase==='messages'?5:4;
   let next=body,pending=null;
   const localEnv={...env,ECCOA_JOBS:{async send(job,options){
     if(!options&&job.runId===body.runId&&job.provider===body.provider){pending=job;return;}
