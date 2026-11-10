@@ -158,3 +158,13 @@ test('linhas de contato repetidas preservam origem paga e publicação de etapas
  const contact=await db.prepare('SELECT * FROM contacts WHERE id=?').bind('p1').first();assert.equal(contact.undated,1);assert.match(contact.stage_name,/Contato iniciado/);assert.match(contact.stage_name,/Retorno agendado/);
  }finally{db.close();}
 });
+
+
+test('senha de nove caracteres é aceita sem reduzir PBKDF2 ou proteção da sessão',async()=>{
+ const testPassword='test12345';const record=await passwordRecord(testPassword);
+ assert.match(record,/^pbkdf2-sha256\$100000\$[a-f0-9]{32}\$[a-f0-9]{64}$/);
+ assert.equal(await verifyPassword(testPassword,record),true);
+ assert.equal(await verifyPassword('wrong1234',record),false);
+ await assert.rejects(()=>passwordRecord('short123'),/PASSWORD_TOO_SHORT/);
+ assert.equal(await verifyPassword('short123',record),false);
+});

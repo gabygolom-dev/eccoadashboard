@@ -33,7 +33,7 @@ No Pages → Settings → Variables and Secrets, configure como **secrets cripto
 - `PASSWORD_RECORD`: registro PBKDF2 da senha privada do cliente.
 - `PSEUDONYM_KEY`: chave aleatória exclusiva Eccoa com pelo menos 32 caracteres.
 
-A senha deve ter pelo menos 14 caracteres. O script local `scripts/password-record.mjs` lê somente `dashboardPassword` de um JSON protegido fora do repositório. Em um terminal privado no macOS, use `node scripts/password-record.mjs /caminho/protegido/eccoa.json | pbcopy`, depois cole em `PASSWORD_RECORD`. Não inclua senha na linha de comando nem imprima o arquivo protegido.
+A senha deve ter pelo menos 9 caracteres, conforme a configuração solicitada pelo cliente. O script local `scripts/password-record.mjs` lê somente `dashboardPassword` de um JSON protegido fora do repositório. Em um terminal privado no macOS, use `node scripts/password-record.mjs /caminho/protegido/eccoa.json | pbcopy`, depois cole em `PASSWORD_RECORD`. Não inclua senha na linha de comando nem imprima o arquivo protegido.
 
 A chave `PSEUDONYM_KEY` deve ser a MESMA no Pages e no Worker. Não a rotacione sem um plano de migração dos IDs históricos. Ela não pode ser reutilizada de outro cliente. Não é necessário colocar os tokens Meta/Rugido no Pages: somente o Worker precisa deles.
 

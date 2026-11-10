@@ -10,3 +10,6 @@ credentials*
 .DS_Store
 artifacts/
 coverage/
+
+# Local credential handoff files; never publish or commit.
+.private/
