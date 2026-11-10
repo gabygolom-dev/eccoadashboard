@@ -51,3 +51,9 @@ Login, carregamento da logo e logout com redirecionamento e revogação de sess�
 Logo Eccoa copiada integralmente do arquivo enviado para `public/assets/eccoa.png`, sem distorção; aparece no cabeçalho e no login. As credenciais não foram incluídas em arquivos versionados, HTML ou artefatos de publicação.
 
 Essas conferências locais não comprovam instalação dos secrets, execução do Cron, login ou publicação funcional na Cloudflare. O usuário informou que ainda configurará os recursos pelo guia.
+
+## Correção de publicação dos arquivos visuais
+
+Em produção foram observadas respostas 404 em `/login.css` e `/assets/eccoa.png`, apesar dos arquivos presentes em `public/` e `dist/`. O build passou a espelhar apenas os arquivos públicos na raiz, mantendo a saída recomendada `dist/`, para compatibilidade com o diretório estático usado pelo projeto Pages.
+
+CSS, tipografia local e logos têm uma lista explícita de rotas públicas, sem depender de cookie. APIs, páginas do painel, JavaScript privado e arquivos de código/configuração continuam protegidos. Nenhum token ou dado de contatos foi adicionado aos arquivos estáticos.

@@ -17,7 +17,7 @@ npm run dev
 
 Use Node 22+. `npm run dev` serve uma prévia local em `http://localhost:8787/__local_preview`, sem tokens, sem importações e sem métricas de demonstração. Esse acesso local de QA não existe no Pages de produção. O teste usa SQLite embutido no Node com sinalizador experimental; a produção usa Cloudflare D1.
 
-`npm run build` gera `dist/` para o Pages e `deploy/eccoa-sync-worker.mjs` para o editor do Worker. A pasta `functions/` permanece na raiz para a implantação automática de Pages Functions.
+`npm run build` gera `dist/` para o Pages e espelha exclusivamente os arquivos públicos na raiz para projetos Pages que publicam a raiz do repositório e `deploy/eccoa-sync-worker.mjs` para o editor do Worker. A pasta `functions/` permanece na raiz para a implantação automática de Pages Functions.
 
 ## Documentação
 

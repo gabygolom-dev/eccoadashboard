@@ -24,7 +24,8 @@ export async function handlePages(request,env,next) {
 }
 async function route(request,env,next) {
   const url=new URL(request.url),path=url.pathname;
-  if(['/login.css','/assets/eccoa.png'].includes(path)&&request.method==='GET')return next();
+  const visualAssets=new Set(['/styles.css','/login.css','/assets/type.css','/assets/eccoa.png','/assets/rugido-simbolo-oficial.png']);
+  if(visualAssets.has(path)&&['GET','HEAD'].includes(request.method))return next();
   if(/(?:^|\/)\.|\.(?:sql|md|jsonc|map|env|pdf)$/.test(path)||['/src','/scripts','/migrations','/functions','/docs','/artifacts'].some(p=>path===p||path.startsWith(p+'/')))return new Response('Não encontrado',{status:404});
   const ready=!!env.ECCOA_DB&&!!env.PASSWORD_RECORD&&!!env.PSEUDONYM_KEY;
   if(path==='/auth/login'){

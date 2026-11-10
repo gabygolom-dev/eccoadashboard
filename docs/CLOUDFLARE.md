@@ -9,7 +9,7 @@ No projeto **eccoadashboard**, conectado a `gabygolom-dev/eccoadashboard`:
 - Branch de produção: `main`.
 - Framework: nenhum.
 - Comando de build: `npm run build`.
-- Diretório de saída: `dist`.
+- Diretório de saída recomendado: `dist`. O build também espelha os arquivos públicos na raiz do repositório para compatibilidade com projetos Pages configurados sem diretório de saída.
 - Diretório raiz: raiz do repositório.
 - Node: 22 ou superior (`NODE_VERSION=22`).
 
@@ -81,7 +81,7 @@ Essas variáveis apenas identificam as conexões no painel; não concedem acesso
 
 ## 7. Validação em produção (obrigatória antes de aceitar a entrega)
 
-1. Navegação privada: login acessível, `/api/report`, `/app.js` e assets privados bloqueados sem sessão; arquivos de código/configuração retornam 404.
+1. Navegação privada: login acessível, `/api/report`, `/app.js` e módulos privados bloqueados sem sessão; CSS e logos públicas retornam os tipos corretos, sem redirecionamento para login; arquivos de código/configuração retornam 404.
 2. Senha correta permite acesso; senha incorreta é recusada; sexta tentativa no mesmo IP em 15 minutos recebe 429; logout invalida a sessão no banco.
 3. Após o primeiro Cron, `settings.lastCron` deve mudar. `runs` deve avançar em páginas e concluir para cada fonte. Confira ambos os horários em Configurações e na visão geral.
 4. Confirme no D1 `sources.identity_json` o workspace e a conta Eccoa antes de aceitar os dados. Os conectores abortam quando ID ou nome não correspondem à configuração autorizada.

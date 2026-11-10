@@ -11,6 +11,7 @@ const env={ECCOA_DB:db,PASSWORD_RECORD:await passwordRecord(previewPassword),PSE
 const {digest}=await import('../src/domain.js');const previewSession=crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-','');
 await db.prepare('INSERT INTO sessions(hash,expires) VALUES(?,?)').bind(await digest(previewSession),Date.now()+8*3600000).run();
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.json':'application/json'};
+const previewDirectory=path.resolve(process.cwd(),process.env.ECCOA_PREVIEW_DIRECTORY||'public');
 const server=http.createServer(async(req,res)=>{
  try{
  const headers=new Headers();for(const[k,v]of Object.entries(req.headers))if(v)headers.set(k,Array.isArray(v)?v.join(', '):v);
@@ -19,7 +20,7 @@ const server=http.createServer(async(req,res)=>{
  const chunks=[];for await(const c of req)chunks.push(c);
  const request=new Request('http://localhost:8787'+req.url,{method:req.method,headers,...(!['GET','HEAD'].includes(req.method)?{body:Buffer.concat(chunks)}:{})});
  const response=await handlePages(request,env,async()=>{
-  const pathname=new URL(request.url).pathname;const file=path.join(process.cwd(),'public',pathname==='/'?'index.html':pathname);
+  const pathname=new URL(request.url).pathname;const file=path.join(previewDirectory,pathname==='/'?'index.html':pathname);
   try{const info=await stat(file);if(!info.isFile())return new Response('Não encontrado',{status:404});return new Response(await readFile(file),{headers:{'Content-Type':types[path.extname(file)]||'application/octet-stream'}});}catch{return new Response('Não encontrado',{status:404});}
  });
  res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
