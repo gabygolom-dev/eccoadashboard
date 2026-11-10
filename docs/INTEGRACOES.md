@@ -2,7 +2,7 @@
 
 ## Regras fixas
 
-- Todas as chamadas às APIs do CRM e da Meta passam por `src/connectors/http.js`, com `method: GET`, `redirect: error`, timeout e verificação da origem.
+- Todas as chamadas às APIs do CRM e da Meta passam por `src/connectors/http.js`, com `method: GET`, `redirect: manual`, rejeição explícita de respostas 3xx, timeout e verificação da origem. Workers não implementa o modo `error`; o modo `manual` impede o seguimento de redirecionamentos e o código rejeita a resposta antes de ler o corpo ou consultar outro endereço. Referência: [Request na Cloudflare](https://developers.cloudflare.com/workers/runtime-apis/request/).
 - Nenhum token fica em URL, cursor persistido, HTML, logs ou Git. Na paginação da Meta, guardamos apenas `after`, nunca `paging.next` (pode conter token).
 - Origem Rugido autorizada pelo cliente: `https://clientcrm-api.rugido.com`, prefixo `/api/v1`. Header `X-Workspace-Id` fixa o workspace. A credencial Rugido usa o header `api_access_token` (não o Bearer de sessão da interface). Só são permitidos `/workspaces/current`, `/pipelines`, `/contacts`, `/conversations` e `/conversations/{id}/messages`.
 - Origem Meta: `https://graph.facebook.com`. Somente `act_{META_ACCOUNT_ID}` e seus edges `ads` e `insights`. Nunca listamos `/me/adaccounts`. O ID deve ser confirmado antes da configuração, preferencialmente cruzando com IDs comprovados no CRM.

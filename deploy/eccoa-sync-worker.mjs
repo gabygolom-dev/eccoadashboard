@@ -41,8 +41,11 @@ async function readJSON(url, {origin,token,headers={},auth='bearer',expectedVers
   if(!['bearer','api_access_token'].includes(auth))throw new UpstreamError('UPSTREAM_AUTH_SCHEME_BLOCKED');
   const credential=auth==='api_access_token'?{api_access_token:token}:{Authorization:`Bearer ${token}`};
   let response;
-  try { response=await fetcher(u.href,{method:'GET',redirect:'error',headers:{Accept:'application/json',...headers,...credential},signal:AbortSignal.timeout(25000)}); }
+  // Workers does not support redirect:'error'. Manual mode never follows the
+  // redirect; reject the response before reading it or forwarding credentials.
+  try { response=await fetcher(u.href,{method:'GET',redirect:'manual',headers:{Accept:'application/json',...headers,...credential},signal:AbortSignal.timeout(25000)}); }
   catch { throw new UpstreamError('UPSTREAM_NETWORK_ERROR'); }
+  if(response.status>=300&&response.status<400)throw new UpstreamError('UPSTREAM_REDIRECT_BLOCKED');
   if (!response.ok) {
     const retry=Math.min(3600,Math.max(0,Number(response.headers.get('retry-after'))||0));
     throw new UpstreamError(`UPSTREAM_HTTP_${response.status}`,retry);

@@ -35,7 +35,7 @@ test('custos e taxas são razões dos totais; conversas não somam ações sobre
  assert.throws(()=>metaActions([{action_type:'x',value:1},{action_type:'x',value:2}],'x'));
 });
 test('transporte exclusivamente GET, sem redirecionamento nem tokens na URL',async()=>{
- let called=0;const fetcher=async(url,opts)=>{called++;assert.equal(opts.method,'GET');assert.equal(opts.redirect,'error');assert.equal(new URL(url).origin,'https://graph.facebook.com');assert.equal(opts.headers.Authorization,'Bearer test');return Response.json({data:[]});};
+ let called=0;const fetcher=async(url,opts)=>{called++;assert.equal(opts.method,'GET');assert.equal(opts.redirect,'manual');assert.equal(new URL(url).origin,'https://graph.facebook.com');assert.equal(opts.headers.Authorization,'Bearer test');return Response.json({data:[]});};
  await readJSON('https://graph.facebook.com/v99.0/act_1/ads',{origin:'https://graph.facebook.com',token:'test',fetcher});assert.equal(called,1);
  await assert.rejects(()=>readJSON('https://evil.invalid/',{origin:'https://graph.facebook.com',token:'test',fetcher}),/ORIGIN_BLOCKED/);
  await assert.rejects(()=>readJSON('https://graph.facebook.com/?access_token=test',{origin:'https://graph.facebook.com',token:'test',fetcher}),/ORIGIN_BLOCKED/);
@@ -112,7 +112,7 @@ test('agendamento não inicia ciclos duplicados e falha preserva confirmação',
 
 
 test('Rugido usa api_access_token sem enviar Bearer de sessão',async()=>{
- await readJSON('https://clientcrm-api.rugido.com/api/v1/workspaces/current',{origin:'https://clientcrm-api.rugido.com',token:'test-only-rugido',auth:'api_access_token',fetcher:async(url,opts)=>{assert.equal(opts.method,'GET');assert.equal(opts.redirect,'error');assert.equal(opts.headers.api_access_token,'test-only-rugido');assert.equal(opts.headers.Authorization,undefined);return Response.json({success:true,data:{}});}});
+ await readJSON('https://clientcrm-api.rugido.com/api/v1/workspaces/current',{origin:'https://clientcrm-api.rugido.com',token:'test-only-rugido',auth:'api_access_token',fetcher:async(url,opts)=>{assert.equal(opts.method,'GET');assert.equal(opts.redirect,'manual');assert.equal(opts.headers.api_access_token,'test-only-rugido');assert.equal(opts.headers.Authorization,undefined);return Response.json({success:true,data:{}});}});
  await assert.rejects(()=>readJSON('https://clientcrm-api.rugido.com/api/v1/workspaces/current',{origin:'https://clientcrm-api.rugido.com',token:'x',auth:'query'}),/AUTH_SCHEME_BLOCKED/);
 });
 

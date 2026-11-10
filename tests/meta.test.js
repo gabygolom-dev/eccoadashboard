@@ -21,7 +21,7 @@ test('Meta bloqueia outra conta, versão ou ação de conversa antes de consulta
 });
 test('Meta envia apenas GET com token em header e impede upgrade silencioso da versão',async()=>{
  await withFetch(async(url,opts)=>{
-  assert.equal(opts.method,'GET');assert.equal(opts.redirect,'error');assert.equal(new URL(url).origin,'https://graph.facebook.com');assert.ok(new URL(url).pathname.startsWith('/v26.0/act_'+ECCOA_META.accountId+'/'));assert.ok(!url.includes(env.META_TOKEN));assert.equal(opts.headers.Authorization,'Bearer '+env.META_TOKEN);
+  assert.equal(opts.method,'GET');assert.equal(opts.redirect,'manual');assert.equal(new URL(url).origin,'https://graph.facebook.com');assert.ok(new URL(url).pathname.startsWith('/v26.0/act_'+ECCOA_META.accountId+'/'));assert.ok(!url.includes(env.META_TOKEN));assert.equal(opts.headers.Authorization,'Bearer '+env.META_TOKEN);
   return Response.json({data:[]},{headers:{'facebook-api-version':'v99.0'}});
  },()=>assert.rejects(()=>metaRead(env,'/ads'),/API_VERSION_MISMATCH/));
 });
