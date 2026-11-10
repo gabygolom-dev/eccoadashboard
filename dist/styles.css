@@ -4,3 +4,5 @@
 .rate{font-size:13px;letter-spacing:0;font-weight:450;color:#6e87a8}.empty-icon svg{width:22px;height:22px}.panel-header>svg{width:17px;height:17px;color:#8ca5c3}.row-icon svg{width:15px;height:15px}
 
 .rugido{display:flex;align-items:center;gap:11px;padding:0 10px;font-size:25px}.rugido img{width:44px;height:44px;max-height:none;object-fit:contain;border-radius:8px;flex-shrink:0}.rugido span{font-size:7px;letter-spacing:1.5px}
+
+.workspace-icon img{width:31px;height:31px;object-fit:contain}.client-brand{display:flex;align-items:center;gap:10px}.client-brand img{height:36px;width:auto;max-width:150px;object-fit:contain}.client-brand span{white-space:nowrap}@media(max-width:700px){.client-brand{gap:7px}.client-brand img{height:28px;max-width:40px}.client-brand span{font-size:10px}}

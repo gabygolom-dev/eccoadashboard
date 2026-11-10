@@ -1,5 +1,6 @@
-import {all,first} from './db.js';
-import {validateRange,daySP,addDays,aggregateMetrics,ratio} from './domain.js';
+import {all,first,run} from './db.js';
+import {ECCOA_META} from './connectors/meta-schema.js';
+import {validateRange,daySP,addDays,aggregateMetrics,ratio,digest} from './domain.js';
 export function selectedSQL(filters) {
   const clauses=[],args=[];
   if(filters.campaign){clauses.push("COALESCE(campaignId,'unknown')=?");args.push(filters.campaign);}
@@ -40,9 +41,18 @@ export async function makeReport(env,url) {
   const metrics=metaAvailable?await all(db,`SELECT ad_id adId,campaign_id campaignId,adset_id adsetId,
     SUM(json_extract(data,'$.spend')) spend,SUM(json_extract(data,'$.impressions')) impressions,
     SUM(json_extract(data,'$.clicks')) clicks,SUM(json_extract(data,'$.conversations')) conversations,
-    MAX(json_extract(data,'$.campaignName')) campaignName,MAX(json_extract(data,'$.adsetName')) adsetName,MAX(json_extract(data,'$.adName')) adName
+    GROUP_CONCAT(DISTINCT json_extract(data,'$.attributionSetting')) reportAttribution,MAX(json_extract(data,'$.campaignName')) campaignName,MAX(json_extract(data,'$.adsetName')) adsetName,MAX(json_extract(data,'$.adName')) adName
     FROM metrics WHERE ${clauses.join(' AND ')} GROUP BY ad_id,campaign_id,adset_id`,...metricArgs):null;
   const totals=aggregateMetrics(metrics,!!source.meta?.identity?.conversationsValidated);
+  let reachReport=null;
+  if(filters.campaign!=='unknown'){
+    if(filters.campaign.length>64||filters.ad.length>64)throw new Error('INVALID_SCOPE');
+    const reachId=await digest(JSON.stringify([ECCOA_META.accountId,start,end,filters.campaign,filters.ad]));
+    await run(db,'INSERT INTO reach_reports(id,start,end,campaign_id,ad_id,requested_at) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET requested_at=excluded.requested_at',reachId,start,end,filters.campaign||null,filters.ad||null,now.toISOString());
+    reachReport=await first(db,'SELECT value,confirmed_at,error FROM reach_reports WHERE id=?',reachId);
+  }
+  const reachValue=metaAvailable&&reachReport?.confirmed_at?reachReport.value:null;
+
   const series=[];const dailyMap=new Map(daily.map(r=>[r.day,r.contacts]));
   for(let d=start;d<=end;d=addDays(d,1))series.push({day:d,contacts:source.crm?.confirmed_at?(dailyMap.get(d)||0):null});
   const rows=new Map();
@@ -60,10 +70,10 @@ export async function makeReport(env,url) {
   return {client:env.CLIENT_NAME||'Eccoa Saúde',today,start,end,partial:end===today,timezone:'America/Sao_Paulo',source,
     generatedAt:now.toISOString(),lastCron:lastCron?.value||null,nextCron:new Date(Math.floor(Date.now()/900000)*900000+900000).toISOString(),
     crmAvailable:!!source.crm?.confirmed_at,metaAvailable,
-    totals:{...totals,contacts:source.crm?.confirmed_at?counted.total:null,campaigns:source.crm?.confirmed_at?counted.campaigns:null,ads:source.crm?.confirmed_at?counted.ads:null,undated:source.crm?.confirmed_at?undated.total:null,reach:null,costContact:source.crm?.confirmed_at?ratio(totals.spend,counted.total):null},
-    series,funnel,entries,campaignOptions,ads:ads.filter(a=>(!filters.campaign||a.campaignId===filters.campaign)&&(!filters.ad||a.id===filters.ad)),
+    totals:{...totals,contacts:source.crm?.confirmed_at?counted.total:null,campaigns:source.crm?.confirmed_at?counted.campaigns:null,ads:source.crm?.confirmed_at?counted.ads:null,undated:source.crm?.confirmed_at?undated.total:null,reach:reachValue,costContact:source.crm?.confirmed_at?ratio(totals.spend,counted.total):null},
+    reachUpdatedAt:reachReport?.confirmed_at||null,reachPending:!reachReport?.confirmed_at,reachError:reachReport?.error||null,series,funnel,entries,campaignOptions,ads:ads.filter(a=>(!filters.campaign||a.campaignId===filters.campaign)&&(!filters.ad||a.id===filters.ad)),
     contacts:contacts.map(c=>({...c,label:`Contato ${c.contactId.slice(0,10)}`,campaignName:adMap.get(c.adId)?.campaignName||(c.campaignId?`Campanha ${c.campaignId}`:'Campanha não identificada'),adName:adMap.get(c.adId)?.name||(c.adId?`Anúncio ${c.adId}`:'Anúncio não identificado')})),
     pagination:{page,pageSize:50,total:source.crm?.confirmed_at?counted.total:0},
-    limitations:{reach:'Alcance indisponível: requer relatório do período e escopo exatos; não somamos alcance.',sales:'Vendas, faturamento, conversão em venda e ROAS indisponíveis: nenhuma fonte de vendas validada.',crmCoverage:source.crm?.confirmed_at?'Histórico confirmado pelas listagens paginadas; evidências anteriores não fornecidas pelo CRM não podem ser recuperadas.':'Aguardando primeira importação validada.',metaCoverage:metaAvailable?null:'Período sem cobertura completa confirmada da Meta. Métricas indisponíveis.'}
+    limitations:{reach:filters.campaign==='unknown'?'Alcance indisponível para campanha não identificada.':reachReport?.error?'Falha ao consultar alcance; a última confirmação desse escopo foi preservada.':reachReport?.confirmed_at?'Alcance obtido em relatório do período e escopo exatos, sem somar dias, campanhas ou anúncios.':'Alcance aguardando relatório do período e escopo exatos no próximo ciclo do servidor; não somamos alcance.',sales:'Vendas, faturamento, conversão em venda e ROAS indisponíveis: nenhuma fonte de vendas validada.',crmCoverage:source.crm?.confirmed_at?'Histórico confirmado pelas listagens paginadas; evidências anteriores não fornecidas pelo CRM não podem ser recuperadas.':'Aguardando primeira importação validada.',metaCoverage:metaAvailable?null:'Período sem cobertura completa confirmada da Meta. Métricas indisponíveis.'}
   };
 }

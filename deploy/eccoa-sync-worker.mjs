@@ -15,13 +15,19 @@ async function stageMany(db,runId,kind,items) {
   }
 }
 
+async function stageMissingAds(db,runId,metrics){
+  for(let i=0;i<metrics.length;i+=50){
+    await db.batch(metrics.slice(i,i+50).map(m=>statement(db,'INSERT OR IGNORE INTO stage(run_id,kind,key,data) VALUES(?,?,?,?)',runId,'ad',m.adId,JSON.stringify({id:m.adId,name:m.adName,campaignId:m.campaignId,campaignName:m.campaignName,adsetId:m.adsetId,adsetName:m.adsetName,status:null,format:null,attribution:null,preview:null}))));
+  }
+}
+
 
 // src/connectors/http.js
 // This module is the ONLY upstream transport. No method parameter is accepted.
 class UpstreamError extends Error {
   constructor(code,retryAfter=0) { super(code);this.retryAfter=retryAfter; }
 }
-async function readJSON(url, {origin,token,headers={},auth='bearer',fetcher=fetch}) {
+async function readJSON(url, {origin,token,headers={},auth='bearer',expectedVersion=null,fetcher=fetch}) {
   const u=new URL(url);
   if(u.origin!==origin || u.protocol!=='https:' || u.username || u.password || u.searchParams.has('access_token')) throw new UpstreamError('UPSTREAM_ORIGIN_BLOCKED');
   if(!['bearer','api_access_token'].includes(auth))throw new UpstreamError('UPSTREAM_AUTH_SCHEME_BLOCKED');
@@ -33,6 +39,7 @@ async function readJSON(url, {origin,token,headers={},auth='bearer',fetcher=fetc
     const retry=Math.min(3600,Math.max(0,Number(response.headers.get('retry-after'))||0));
     throw new UpstreamError(`UPSTREAM_HTTP_${response.status}`,retry);
   }
+  if(expectedVersion&&response.headers.get('facebook-api-version')!==expectedVersion)throw new UpstreamError('UPSTREAM_API_VERSION_MISMATCH');
   if (Number(response.headers.get('content-length'))>12000000) throw new UpstreamError('UPSTREAM_RESPONSE_TOO_LARGE');
   // Do not log response bodies: CRM data may contain health information.
   let data;try { data=await response.json(); } catch {throw new UpstreamError('UPSTREAM_INVALID_JSON');}
@@ -246,11 +253,25 @@ async function projectConversation(raw,s,key,dictionary){
 }
 
 
+// src/connectors/meta-schema.js
+// Authorized tenant confirmed via CRM-origin ad IDs and the Meta account response.
+const ECCOA_META = Object.freeze({
+  accountId:'1299657228271057',
+  accountName:'ECCOA Saúde',
+  apiVersion:'v26.0',
+  conversationAction:'onsite_conversion.messaging_conversation_started_7d'
+});
+
+
 // src/connectors/meta.js
+
 
 
 const META_ORIGIN='https://graph.facebook.com';
 function metaConfig(env) {
+  if(env.META_ACCOUNT_ID!==ECCOA_META.accountId)throw new Error('META_ACCOUNT_SCOPE_BLOCKED');
+  if(env.META_API_VERSION!==ECCOA_META.apiVersion)throw new Error('META_API_VERSION_NOT_VALIDATED');
+  if(env.META_CONVERSATION_ACTION!==ECCOA_META.conversationAction)throw new Error('META_CONVERSATION_ACTION_NOT_VALIDATED');
   if(!env.META_TOKEN||!/^\d+$/.test(env.META_ACCOUNT_ID||'')||!/^v\d+\.0$/.test(env.META_API_VERSION||'')||!/^\d{4}-\d{2}-\d{2}$/.test(env.HISTORY_START||''))throw new Error('META_CONFIGURATION_REQUIRED');
 }
 async function metaRead(env,edge,params={}) {
@@ -258,7 +279,7 @@ async function metaRead(env,edge,params={}) {
   if(!['','/ads','/insights'].includes(edge))throw new Error('META_ENDPOINT_BLOCKED');
   const u=new URL(`/${env.META_API_VERSION}/act_${env.META_ACCOUNT_ID}${edge}`,META_ORIGIN);
   for(const [k,v] of Object.entries(params))if(v!==null&&v!==undefined)u.searchParams.set(k,typeof v==='object'?JSON.stringify(v):String(v));
-  return readJSON(u,{origin:META_ORIGIN,token:env.META_TOKEN});
+  return readJSON(u,{origin:META_ORIGIN,token:env.META_TOKEN,expectedVersion:env.META_API_VERSION});
 }
 async function verifyMeta(env) {
   const a=await metaRead(env,'',{fields:'id,name,currency,timezone_name,account_status'});
@@ -266,20 +287,24 @@ async function verifyMeta(env) {
   if(a.timezone_name!=='America/Sao_Paulo'||a.currency!=='BRL')throw new Error('META_TIMEZONE_OR_CURRENCY_MISMATCH');
   return {id:a.id,name:a.name,currency:a.currency,timezone:a.timezone_name,version:env.META_API_VERSION,attribution:'use_unified_attribution_setting=true',action:env.META_CONVERSATION_ACTION,conversationsValidated:env.META_METRIC_VALIDATED==='true'};
 }
-async function adsPage(env,after) {
-  const data=await metaRead(env,'/ads',{fields:'id,name,status,effective_status,campaign{id,name},adset{id,name,attribution_spec},creative{id,object_type}',limit:100,after});
+async function adsPage(env,after,limit=100) {
+  if(!Number.isInteger(limit)||limit<1||limit>100)throw new Error('META_PAGE_LIMIT_INVALID');
+  const data=await metaRead(env,'/ads',{fields:'id,account_id,name,status,effective_status,campaign{id,name},adset{id,name,attribution_spec},creative{id,object_type}',limit,after});
   if(!Array.isArray(data.data))throw new Error('META_ADS_SCHEMA_MISMATCH');
+  if(data.data.some(a=>a.account_id!==ECCOA_META.accountId))throw new Error('META_AD_ACCOUNT_MISMATCH');
   const ads=data.data.map(a=>({id:a.id,name:a.name,campaignId:a.campaign?.id,campaignName:a.campaign?.name,adsetId:a.adset?.id,adsetName:a.adset?.name,status:a.effective_status||a.status,format:a.creative?.object_type||null,attribution:a.adset?.attribution_spec||null,preview:null}));
   if(ads.some(a=>!a.id||!a.campaignId||!a.adsetId))throw new Error('META_AD_HIERARCHY_MISSING');
   return {items:ads,next:nextCursor(data,META_ORIGIN,env.META_ACCOUNT_ID)};
 }
-async function insightPage(env,start,end,after) {
-  const d=await metaRead(env,'/insights',{fields:'account_id,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,inline_link_clicks,actions,date_start,date_stop',level:'ad',time_range:{since:start,until:end},time_increment:1,use_unified_attribution_setting:true,action_report_time:'impression',limit:250,after});
+async function insightPage(env,start,end,after,limit=250) {
+  if(!Number.isInteger(limit)||limit<1||limit>250)throw new Error('META_PAGE_LIMIT_INVALID');
+  const d=await metaRead(env,'/insights',{fields:'account_id,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,inline_link_clicks,actions,attribution_setting,date_start,date_stop',level:'ad',time_range:{since:start,until:end},time_increment:1,use_unified_attribution_setting:true,action_report_time:'impression',limit,after});
   if(!Array.isArray(d.data))throw new Error('META_INSIGHTS_SCHEMA_MISMATCH');
   const items=d.data.map(r=>{
     if(r.account_id!==env.META_ACCOUNT_ID||r.date_start!==r.date_stop||r.date_start<start||r.date_start>end)throw new Error('META_SCOPE_MISMATCH');
+    if(!r.ad_id||!r.adset_id||!r.campaign_id)throw new Error('META_AD_HIERARCHY_MISSING');
     const number=k=>{const n=Number(r[k]||0);if(!Number.isFinite(n)||n<0)throw new Error('META_INVALID_METRIC');return n;};
-    return {day:r.date_start,adId:r.ad_id,adName:r.ad_name,campaignId:r.campaign_id,campaignName:r.campaign_name,adsetId:r.adset_id,adsetName:r.adset_name,spend:number('spend'),impressions:number('impressions'),clicks:number('inline_link_clicks'),conversations:env.META_METRIC_VALIDATED==='true'?metaActions(r.actions,env.META_CONVERSATION_ACTION):null};
+    return {day:r.date_start,adId:r.ad_id,adName:r.ad_name,campaignId:r.campaign_id,campaignName:r.campaign_name,adsetId:r.adset_id,adsetName:r.adset_name,spend:number('spend'),impressions:number('impressions'),clicks:number('inline_link_clicks'),attributionSetting:r.attribution_setting||null,conversations:env.META_METRIC_VALIDATED==='true'?metaActions(r.actions,env.META_CONVERSATION_ACTION):null};
   });
   return {items,next:nextCursor(d,META_ORIGIN,env.META_ACCOUNT_ID)};
 }
@@ -287,6 +312,21 @@ function syncRange(env,confirmed) {
   const end=daySP();const start=confirmed? [env.HISTORY_START,addDays(end,-35)].sort().at(-1):env.HISTORY_START;
   if(start>end)throw new Error('META_HISTORY_START_IN_FUTURE');
   return {start,end};
+}
+
+async function exactReach(env,start,end,scope={}){
+  validateRange(start,end);
+  const level=scope.ad?'ad':scope.campaign?'campaign':'account';
+  const filtering=[];
+  if(scope.campaign)filtering.push({field:'campaign.id',operator:'IN',value:[scope.campaign]});
+  if(scope.ad)filtering.push({field:'ad.id',operator:'IN',value:[scope.ad]});
+  const d=await metaRead(env,'/insights',{fields:'account_id,campaign_id,ad_id,reach,date_start,date_stop',level,time_range:{since:start,until:end},...(filtering.length?{filtering}:{}),use_unified_attribution_setting:true,action_report_time:'impression',limit:2});
+  if(!Array.isArray(d.data)||d.data.length>1||d.paging?.next)throw new Error('META_REACH_SCOPE_AMBIGUOUS');
+  if(!d.data.length)return 0;
+  const row=d.data[0];
+  if(row.account_id!==ECCOA_META.accountId||row.date_start!==start||row.date_stop!==end||(scope.campaign&&row.campaign_id!==scope.campaign)||(scope.ad&&row.ad_id!==scope.ad))throw new Error('META_REACH_SCOPE_MISMATCH');
+  const value=Number(row.reach);if(row.reach===undefined||!Number.isSafeInteger(value)||value<0)throw new Error('META_REACH_VALUE_INVALID');
+  return value;
 }
 
 
@@ -417,10 +457,26 @@ async function metaStep(env,job,c){
   if(c.phase==='insights'){
     const p=await insightPage(env,c.windowStart,c.windowEnd,c.after);
     await stageMany(db,job.id,'metric',p.items.map(metric=>({key:`${metric.day}:${metric.adId}`,data:metric})));
+    await stageMissingAds(db,job.id,p.items);
     if(p.next===c.after&&p.next)throw new Error('META_REPEATED_CURSOR');
     if(p.next)return {...c,after:p.next};
-    if(c.windowEnd===c.end)return {...c,done:true};
+    if(c.windowEnd===c.end)return {...c,phase:'reach',reachAfter:'',reachCount:0};
     return {...c,after:null,windowStart:addDays(c.windowEnd,1),windowEnd:[addDays(c.windowEnd,7),c.end].sort()[0]};
+  }
+  if(c.phase==='reach'){
+    if(c.reachCount>=100)return {...c,done:true};
+    const request=await first(db,"SELECT * FROM reach_reports WHERE id>? AND requested_at>? AND (confirmed_at IS NULL OR confirmed_at<?) ORDER BY id LIMIT 1",c.reachAfter,new Date(Date.now()-30*86400000).toISOString(),job.started_at);
+    if(!request)return {...c,done:true};
+    let value=null,error=null;
+    try{
+      if(request.ad_id||request.campaign_id){
+        const scope=await first(db,`SELECT 1 found FROM stage WHERE run_id=? AND kind='ad' AND (? IS NULL OR key=?) AND (? IS NULL OR json_extract(data,'$.campaignId')=?) LIMIT 1`,job.id,request.ad_id,request.ad_id,request.campaign_id,request.campaign_id);
+        if(!scope)throw new Error('META_REACH_SCOPE_UNVERIFIED');
+      }
+      value=await exactReach(env,request.start,request.end,{campaign:request.campaign_id,ad:request.ad_id});
+    }catch(e){error=safeError(e);}
+    await stage(db,job.id,'reach',request.id,{value,error});
+    return {...c,reachAfter:request.id,reachCount:c.reachCount+1};
   }
   throw new Error('META_INVALID_CHECKPOINT');
 }
@@ -439,6 +495,7 @@ async function publishRun(env,job,c){
       ON CONFLICT(id) DO UPDATE SET undated=1`,at,job.id));
   }else{
     stmts.push(statement(db,`INSERT INTO ads(id,data) SELECT key,data FROM stage WHERE run_id=? AND kind='ad' ON CONFLICT(id) DO UPDATE SET data=excluded.data`,job.id));
+    stmts.push(statement(db,`UPDATE reach_reports SET value=COALESCE((SELECT json_extract(data,'$.value') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id),value),confirmed_at=CASE WHEN (SELECT json_extract(data,'$.value') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id) IS NOT NULL THEN ? ELSE confirmed_at END,error=(SELECT json_extract(data,'$.error') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id) WHERE id IN(SELECT key FROM stage WHERE run_id=? AND kind='reach')`,job.id,job.id,at,job.id,job.id));
     stmts.push(statement(db,'DELETE FROM metrics WHERE day BETWEEN ? AND ?',c.start,c.end));
     stmts.push(statement(db,`INSERT INTO metrics(day,ad_id,campaign_id,adset_id,data,run_id) SELECT json_extract(data,'$.day'),json_extract(data,'$.adId'),json_extract(data,'$.campaignId'),json_extract(data,'$.adsetId'),data,? FROM stage WHERE run_id=? AND kind='metric'`,job.id,job.id));
     stmts.push(statement(db,`INSERT INTO metric_revisions(run_id,day,ad_id,data,confirmed_at) SELECT ?,json_extract(data,'$.day'),json_extract(data,'$.adId'),data,? FROM stage WHERE run_id=? AND kind='metric' ON CONFLICT DO NOTHING`,job.id,at,job.id));

@@ -17,7 +17,7 @@ A pasta `functions/` é implantada pelo Pages. Não publique apenas arquivos est
 
 ## 2. Banco exclusivo
 
-Em Storage & databases → D1, crie **eccoa-dashboard-db**. No console SQL do próprio banco, execute todo o conteúdo de [`migrations/0001.sql`](../migrations/0001.sql). Executar novamente é seguro (IF NOT EXISTS/INSERT OR IGNORE).
+Em Storage & databases → D1, crie **eccoa-dashboard-db**. No console SQL do próprio banco, execute, nesta ordem, [`migrations/0001.sql`](../migrations/0001.sql) e [`migrations/0002_reach.sql`](../migrations/0002_reach.sql). Se a primeira já foi executada, aplique somente a segunda. Reexecutar é seguro (IF NOT EXISTS/INSERT OR IGNORE).
 
 No Pages → Settings → Bindings, adicione um D1 binding:
 
@@ -73,9 +73,9 @@ Desative logs de conteúdo das requisições/respostas e não ative captura de m
 
 - `CLIENT_NAME=Eccoa Saúde`.
 - `CRM_WORKSPACE_NAME=Eccoa Saúde`: nome exato validado do workspace Eccoa.
-- `META_ACCOUNT_ID`: apenas números, da conta validada Eccoa.
-- `META_API_VERSION`: versão confirmada na documentação oficial/resposta real.
-- `BRANDS_READY=true` somente depois de colocar a logo oficial Eccoa em `public/assets/eccoa.png`, com proporção original. O símbolo Rugido já está incluído como `public/assets/rugido-simbolo-oficial.png`, cópia integral do arquivo fornecido, exibido sem distorção e sem depender dessa variável. Se a logo Eccoa tiver outro formato, ajustar seu caminho em `public/app.js`; não converter uma marca raster para um SVG falso.
+- `META_ACCOUNT_ID=1299657228271057`: conta Eccoa validada.
+- `META_API_VERSION=v26.0`: versão confirmada no SDK oficial e nas respostas reais.
+- As duas logos oficiais já estão nos arquivos publicados, com proporção preservada: `public/assets/rugido-simbolo-oficial.png` e `public/assets/eccoa.png`. Não é necessário configurar `BRANDS_READY`; essa variável foi dispensada. A logo Eccoa também aparece na tela de login.
 
 Essas variáveis apenas identificam as conexões no painel; não concedem acesso às APIs.
 
@@ -91,3 +91,29 @@ Essas variáveis apenas identificam as conexões no painel; não concedem acesso
 8. Anote URL real, commit, horários confirmados e limitações em `VALIDACAO.md`.
 
 A infraestrutura tem custos e limites da conta Cloudflare. Nenhum recurso de outro cliente deve ser renomeado, compartilhado ou reutilizado. Backups do banco contêm apenas dados minimizados; proteja o acesso administrativo.
+
+## Valores confirmados para o Worker Eccoa
+
+Configure estes valores **não secretos** no Worker `eccoa-dashboard-sync`:
+
+```text
+CRM_API_ORIGIN_APPROVED=true
+CRM_WORKSPACE_ID=503dc93f-7b19-408b-b714-63e508ede833
+CRM_WORKSPACE_NAME=Eccoa Saúde
+META_ACCOUNT_ID=1299657228271057
+META_ACCOUNT_NAME=ECCOA Saúde
+META_API_VERSION=v26.0
+META_CONVERSATION_ACTION=onsite_conversion.messaging_conversation_started_7d
+META_METRIC_VALIDATED=true
+HISTORY_START=2025-12-01
+```
+
+Configure `CRM_TOKEN`, `META_TOKEN` e `PSEUDONYM_KEY` como **secrets**, nunca como valores no GitHub. Copie cada token de seu arquivo protegido, sem adicionar rótulos, espaços ou quebras de linha. O PDF pode quebrar o token Meta em várias linhas; elas precisam ser reunidas em uma única sequência. O valor da credencial não consta neste guia.
+
+`CRM_SCHEMA_JSON` pode ficar ausente: o contrato confirmado já está no código. No Pages, além do binding D1 e da chave de pseudonimização, configure `PASSWORD_RECORD` conforme a seção da senha. Os tokens das APIs ficam somente no Worker.
+
+## Alcance por período e filtro
+
+A migração `0002_reach.sql` habilita o cache de relatórios exatos. Ao selecionar um período/campanha/anúncio no painel, uma solicitação interna de relatório é registrada no D1. Isso **não executa uma importação nem consulta a Meta pelo navegador**. No ciclo seguinte, o mesmo Worker serializado consulta o escopo exato por GET e confirma o valor junto à atualização.
+
+Até a primeira confirmação desse escopo, aparece “—”. Em caso de falha, o valor anterior do mesmo escopo permanece, com horário e aviso. Valores de outro período/filtro nunca são reutilizados. Alcance diário ou de campanhas/anúncios nunca é somado. Cada ciclo atende até 100 escopos solicitados recentemente, para limitar o trabalho.

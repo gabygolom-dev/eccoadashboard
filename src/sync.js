@@ -1,6 +1,6 @@
-import {all,first,run,statement,stage,stageMany} from './db.js';
+import {all,first,run,statement,stage,stageMany,stageMissingAds} from './db.js';
 import {crmConfig,crmRead,verifyWorkspace,pageItems,projectContact,projectEvent,messagePage,projectPipelines,projectConversation} from './connectors/rugido.js';
-import {metaConfig,verifyMeta,adsPage,insightPage,syncRange} from './connectors/meta.js';
+import {metaConfig,verifyMeta,adsPage,insightPage,syncRange,exactReach} from './connectors/meta.js';
 import {getPath,safeId,addDays} from './domain.js';
 export async function startCycle(env,scheduledAt=new Date().toISOString()) {
   await run(env.ECCOA_DB,"INSERT INTO settings(key,value) VALUES('lastCron',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",scheduledAt);
@@ -124,10 +124,26 @@ async function metaStep(env,job,c){
   if(c.phase==='insights'){
     const p=await insightPage(env,c.windowStart,c.windowEnd,c.after);
     await stageMany(db,job.id,'metric',p.items.map(metric=>({key:`${metric.day}:${metric.adId}`,data:metric})));
+    await stageMissingAds(db,job.id,p.items);
     if(p.next===c.after&&p.next)throw new Error('META_REPEATED_CURSOR');
     if(p.next)return {...c,after:p.next};
-    if(c.windowEnd===c.end)return {...c,done:true};
+    if(c.windowEnd===c.end)return {...c,phase:'reach',reachAfter:'',reachCount:0};
     return {...c,after:null,windowStart:addDays(c.windowEnd,1),windowEnd:[addDays(c.windowEnd,7),c.end].sort()[0]};
+  }
+  if(c.phase==='reach'){
+    if(c.reachCount>=100)return {...c,done:true};
+    const request=await first(db,"SELECT * FROM reach_reports WHERE id>? AND requested_at>? AND (confirmed_at IS NULL OR confirmed_at<?) ORDER BY id LIMIT 1",c.reachAfter,new Date(Date.now()-30*86400000).toISOString(),job.started_at);
+    if(!request)return {...c,done:true};
+    let value=null,error=null;
+    try{
+      if(request.ad_id||request.campaign_id){
+        const scope=await first(db,`SELECT 1 found FROM stage WHERE run_id=? AND kind='ad' AND (? IS NULL OR key=?) AND (? IS NULL OR json_extract(data,'$.campaignId')=?) LIMIT 1`,job.id,request.ad_id,request.ad_id,request.campaign_id,request.campaign_id);
+        if(!scope)throw new Error('META_REACH_SCOPE_UNVERIFIED');
+      }
+      value=await exactReach(env,request.start,request.end,{campaign:request.campaign_id,ad:request.ad_id});
+    }catch(e){error=safeError(e);}
+    await stage(db,job.id,'reach',request.id,{value,error});
+    return {...c,reachAfter:request.id,reachCount:c.reachCount+1};
   }
   throw new Error('META_INVALID_CHECKPOINT');
 }
@@ -146,6 +162,7 @@ export async function publishRun(env,job,c){
       ON CONFLICT(id) DO UPDATE SET undated=1`,at,job.id));
   }else{
     stmts.push(statement(db,`INSERT INTO ads(id,data) SELECT key,data FROM stage WHERE run_id=? AND kind='ad' ON CONFLICT(id) DO UPDATE SET data=excluded.data`,job.id));
+    stmts.push(statement(db,`UPDATE reach_reports SET value=COALESCE((SELECT json_extract(data,'$.value') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id),value),confirmed_at=CASE WHEN (SELECT json_extract(data,'$.value') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id) IS NOT NULL THEN ? ELSE confirmed_at END,error=(SELECT json_extract(data,'$.error') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id) WHERE id IN(SELECT key FROM stage WHERE run_id=? AND kind='reach')`,job.id,job.id,at,job.id,job.id));
     stmts.push(statement(db,'DELETE FROM metrics WHERE day BETWEEN ? AND ?',c.start,c.end));
     stmts.push(statement(db,`INSERT INTO metrics(day,ad_id,campaign_id,adset_id,data,run_id) SELECT json_extract(data,'$.day'),json_extract(data,'$.adId'),json_extract(data,'$.campaignId'),json_extract(data,'$.adsetId'),data,? FROM stage WHERE run_id=? AND kind='metric'`,job.id,job.id));
     stmts.push(statement(db,`INSERT INTO metric_revisions(run_id,day,ad_id,data,confirmed_at) SELECT ?,json_extract(data,'$.day'),json_extract(data,'$.adId'),data,? FROM stage WHERE run_id=? AND kind='metric' ON CONFLICT DO NOTHING`,job.id,at,job.id));

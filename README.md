@@ -4,7 +4,7 @@ Dashboard em português e azul-marinho para tráfego pago e CRM Rugido. Publica�
 
 ## Estado
 
-Interface, autenticação, persistência, conectores restritos de leitura e fluxo de sincronização implementados. **CRM validado em leitura**: token e workspace Eccoa confirmados, paginação e campos de origem conferidos nas respostas reais. A ativação em produção ainda depende de secrets, D1, fila, Worker e Cron no Cloudflare. A Meta aguarda credencial e validação da conta. Nenhum resultado fictício é exibido como dado real. O símbolo oficial da Rugido foi incluído; a logo da Eccoa está pendente.
+Interface, autenticação, persistência, conectores restritos de leitura e fluxo de sincronização implementados. **CRM validado em leitura**: token e workspace Eccoa confirmados, paginação e campos de origem conferidos nas respostas reais. A ativação em produção ainda depende de secrets, D1, fila, Worker e Cron no Cloudflare. A conta Meta Eccoa, os campos, a paginação e a métrica de conversas foram validados por GET, cruzando anúncios com o CRM. Nenhum resultado fictício é exibido como dado real. Os arquivos oficiais das duas logos foram incluídos com proporção preservada.
 
 ## Comandos
 
@@ -24,7 +24,8 @@ Use Node 22+. `npm run dev` serve uma prévia local em `http://localhost:8787/__
 - [Configuração Cloudflare passo a passo](docs/CLOUDFLARE.md).
 - [Contrato das integrações e renovação dos tokens](docs/INTEGRACOES.md).
 - [Validação e pendências](docs/VALIDACAO.md).
-- [Migração D1](migrations/0001.sql).
+- [Migração D1 básica](migrations/0001.sql).
+- [Migração do cache de alcance](migrations/0002_reach.sql).
 
 Repositório exclusivo: [gabygolom-dev/eccoadashboard](https://github.com/gabygolom-dev/eccoadashboard).
 

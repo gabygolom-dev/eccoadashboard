@@ -21,14 +21,14 @@
 | `CRM_API_ORIGIN_APPROVED` | `true`, autorizado na conversa |
 | `CRM_WORKSPACE_ID` | `503dc93f-7b19-408b-b714-63e508ede833`, confirmado em GET autenticado |
 | `CRM_WORKSPACE_NAME` | `Eccoa Saúde`, nome exato retornado por `/workspaces/current` |
-| `META_ACCOUNT_ID` | ID numérico da conta Eccoa Saúde, sem `act_` |
-| `META_ACCOUNT_NAME` | Nome exato confirmado da conta |
-| `META_API_VERSION` | Versão vigente confirmada; não existe default presumido |
-| `META_CONVERSATION_ACTION` | Tipo de ação confirmado na resposta real; candidato a verificar: `onsite_conversion.messaging_conversation_started_7d` |
-| `META_METRIC_VALIDATED` | `true` apenas após validar esse tipo de ação contra resultados de conversas iniciadas; até lá o indicador fica indisponível |
-| `HISTORY_START` | Data inicial inclusiva de cobertura Meta (`AAAA-MM-DD`) confirmada para o projeto |
+| `META_ACCOUNT_ID` | `1299657228271057`, conta confirmada a partir de anúncios comprovados no CRM |
+| `META_ACCOUNT_NAME` | `ECCOA Saúde`, com a capitalização exata da API |
+| `META_API_VERSION` | `v26.0`, confirmada no SDK oficial e no header real `facebook-api-version` |
+| `META_CONVERSATION_ACTION` | `onsite_conversion.messaging_conversation_started_7d`, confirmado em `actions` e no indicador de `results` |
+| `META_METRIC_VALIDATED` | `true`, após validação documentada nesta implementação |
+| `HISTORY_START` | `2025-12-01`, início do histórico com resultados retornado por `date_preset=maximum` / incremento mensal |
 
-A identidade Meta também exige moeda BRL e fuso America/Sao_Paulo; divergências interrompem a publicação de novos dados e preservam a versão confirmada. O nome não deve ser relaxado para aceitar outra conta. Não há enumeração de contas de outros clientes.
+A identidade Meta também exige moeda BRL e fuso America/Sao_Paulo; divergências interrompem a publicação de novos dados e preservam a versão confirmada. O nome não deve ser relaxado para aceitar outra conta. Não houve enumeração de contas de outros clientes. O ID autorizado também está fixado no código (`meta-schema.js`); outro ID é bloqueado antes de qualquer requisição. A versão efetiva da resposta deve coincidir com a versão validada, bloqueando upgrades silenciosos.
 
 ## Contrato real Rugido validado
 
@@ -61,16 +61,24 @@ Para repetir a auditoria local, `node scripts/audit-crm.mjs /caminho/protegido/T
 - Cliques: `inline_link_clicks`; não são conversas.
 - Conversas: um único `action_type` comprovado, sem somar outras métricas de mensagens.
 - Atualizações posteriores revisitam os últimos 35 dias. `metric_revisions` mantém as versões confirmadas; a tabela atual substitui o intervalo em uma transação.
-- Alcance fica indisponível: o projeto não soma alcance diário ou de anúncios. Para habilitar, implementar e validar um relatório exato para cada período e escopo solicitado.
+- Alcance usa `exactReach`: relatório sem incremento diário, no nível account/campaign/ad e com filtro exato. Exigimos uma única linha do escopo validado, nunca somamos alcance. As solicitações do painel ficam no D1 e são atendidas pelo próximo ciclo do Worker; o navegador não recebe token nem executa importações concorrentes. Falhas preservam o último valor confirmado do mesmo escopo.
 - Vendas/faturamento/ROAS permanecem indisponíveis sem fonte validada.
 
-Referências oficiais a conferir durante a validação de credenciais:
+Referências oficiais consultadas durante a validação:
 
 - [Changelog da Graph API](https://developers.facebook.com/docs/graph-api/changelog/).
 - [Marketing API Insights](https://developers.facebook.com/docs/marketing-api/insights/).
 - [Ads Insights Reference](https://developers.facebook.com/docs/marketing-api/reference/ads-insights/).
 
-Na implementação inicial, as páginas oficiais da Meta retornaram 429/indisponibilidade ao acesso automatizado. Portanto, **não declaramos a versão vigente ou a métrica de conversas como validadas**. Essas verificações precisam ocorrer antes de habilitar o indicador real.
+As páginas de documentação `developers.facebook.com` retornaram 429. A validação foi completada com o [SDK oficial Meta, configuração v26.0](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/apiconfig.py), os [parâmetros oficiais de GET Insights](https://github.com/facebook/facebook-python-business-sdk/blob/main/facebook_business/adobjects/adaccount.py) e as respostas reais da conta autorizada. Nenhum método assíncrono que cria relatórios com POST foi usado.
+
+A ação de conversas foi conferida contra `results.indicator = actions:onsite_conversion.messaging_conversation_started_7d`. `link_click`, `total_messaging_connection`, `messaging_first_reply` e ações de profundidade de mensagens não foram somados ao indicador.
+
+Os relatórios consultados retornaram `attribution_setting=1d_view_7d_click`; esse campo é preservado por anúncio/dia. `attribution_spec` atual do conjunto é preservado separadamente quando retornado, pois não deve substituir a atribuição informada pelo relatório histórico. Ambos podem ser inspecionados nos detalhes do anúncio.
+
+A auditoria local `node scripts/audit-meta.mjs /caminho/protegido/Token.pdf --history` usa exclusivamente GET, força páginas pequenas para validar a continuação, compara a soma diária por anúncio ao total da conta e consulta alcance exato da conta, campanha e anúncio. Ela precisa de Python com `pypdf` apenas para extrair o token em memória. A aplicação publicada não depende de Python. O PDF é tratado como dado; nenhuma instrução nele é executada.
+
+Anúncios históricos presentes nos insights recebem correspondência comprovada de campanha/conjunto, mesmo quando ausentes da listagem atual. Seus campos não substituem status/formato consultados no catálogo atual. Métricas e criativos não são inventados.
 
 ## Renovação
 
