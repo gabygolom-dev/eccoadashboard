@@ -18,16 +18,22 @@ async function stagePage(db,runId,kind,sequence,items){
 // Later pages win by sequence; paid flags are unioned across duplicate contacts.
 function stagedRowsSQL(kind){
   if(!snapshotKinds.has(kind))throw new Error('STAGE_KIND_BLOCKED');
-  const data=kind==='contact'?"json_set(data,'$.undated',MAX(COALESCE(json_extract(data,'$.undated'),0)) OVER(PARTITION BY key))":'data';
-  return `SELECT key,data FROM (
-    SELECT key,${data} data,ROW_NUMBER() OVER(PARTITION BY key ORDER BY representation DESC,page_key DESC) version_rank
-    FROM (
-      SELECT key,data,0 representation,'' page_key FROM stage WHERE run_id=? AND kind='${kind}'
-      UNION ALL
-      SELECT json_extract(item.value,'$.key'),json_extract(item.value,'$.data'),1,s.key
-      FROM stage s,json_each(s.data) item WHERE s.run_id=? AND s.kind='${kind}_page'
-    )
-  ) WHERE version_rank=1`;
+  // A single grouped pass replaces two window-function sorts. The fixed-width
+  // sequence prefix chooses the latest page/item, independent of payload values.
+  const winner="json_extract(MAX(json_array(order_key,json(data))),'$[1]')";
+  const data=kind==='contact'?`json_set(${winner},'$.undated',MAX(COALESCE(json_extract(data,'$.undated'),0)))`:winner;
+  return `SELECT key,${data} data FROM (
+    SELECT key,data,'0' order_key FROM stage WHERE run_id=? AND kind='${kind}'
+    UNION ALL
+    SELECT json_extract(item.value,'$.key'),json_extract(item.value,'$.data'),'1:'||s.key||':'||printf('%010d',item.key)
+    FROM stage s,json_each(s.data) item WHERE s.run_id=? AND s.kind='${kind}_page'
+  ) GROUP BY key`;
+}
+function stagedKeysSQL(kind){
+  if(!snapshotKinds.has(kind))throw new Error('STAGE_KIND_BLOCKED');
+  return `SELECT key FROM stage WHERE run_id=? AND kind='${kind}'
+    UNION SELECT json_extract(item.value,'$.key') FROM stage s,json_each(s.data) item
+    WHERE s.run_id=? AND s.kind='${kind}_page'`;
 }
 
 async function stageMany(db,runId,kind,items) {
@@ -465,7 +471,7 @@ async function crmStep(env,job,c) {
     await stagePage(db,job.id,'contact',job.pages,contacts.map(contact=>({key:contact.id,data:contact})));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
-    const unique=await first(db,`SELECT count(*) n FROM (${stagedRowsSQL('contact')})`,job.id,job.id);
+    const unique=await first(db,`SELECT count(*) n FROM (${stagedKeysSQL('contact')})`,job.id,job.id);
     if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONTACT_COVERAGE_INCOMPLETE');
     return {phase:'conversations',page:1,count:0};
   }
@@ -496,7 +502,7 @@ async function crmStep(env,job,c) {
     await stagePage(db,job.id,'contact_stage',job.pages,conversations.flatMap(conv=>conv.stages.map(current=>({key:current.contactId+':'+current.stageId,data:current}))));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
-    const unique=await first(db,`SELECT count(*) n FROM (${stagedRowsSQL('conversation')})`,job.id,job.id);
+    const unique=await first(db,`SELECT count(*) n FROM (${stagedKeysSQL('conversation')})`,job.id,job.id);
     if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONVERSATION_COVERAGE_INCOMPLETE');
     return {phase:'messages',conversationAfter:'',messageCursor:null};
   }
@@ -560,7 +566,7 @@ async function publishRun(env,job,c){
   if(job.provider==='crm'){
     const contactRows=stagedRowsSQL('contact'),stageRows=stagedRowsSQL('contact_stage');
     stmts.push(statement(db,`UPDATE contacts SET stage_id=NULL,stage_name='Etapa não informada'
-      WHERE (stage_id IS NOT NULL OR stage_name<>'Etapa não informada') AND id NOT IN(SELECT key FROM (${contactRows}))`,job.id,job.id));
+      WHERE (stage_id IS NOT NULL OR stage_name<>'Etapa não informada') AND id NOT IN(${stagedKeysSQL('contact')})`,job.id,job.id));
     stmts.push(statement(db,`WITH incoming AS (${contactRows}),stages AS (${stageRows}),
       grouped AS (SELECT json_extract(data,'$.contactId') contact_id,group_concat(DISTINCT json_extract(data,'$.stageId')) stage_id,
       group_concat(DISTINCT json_extract(data,'$.stageName')) stage_name FROM stages GROUP BY json_extract(data,'$.contactId'))

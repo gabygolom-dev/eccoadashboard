@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createDB} from '../scripts/local-db.mjs';
-import {stage,stagePage} from '../src/db.js';
+import {stage,stagePage,stagedRowsSQL,stagedKeysSQL} from '../src/db.js';
 import {publishRun,startCycle} from '../src/sync.js';
 
 async function start(db,id,provider){
@@ -10,6 +10,17 @@ async function start(db,id,provider){
  await stage(db,id,'identity',provider,{id:'test-only',conversationsValidated:true});
 }
 const changes=db=>Number(db.sqlite.prepare('SELECT total_changes() n').get().n);
+
+test('snapshot escolhe a última página e o último item, mesmo quando o novo valor é menor',async()=>{
+ const db=createDB();try{
+  await stage(db,'order','metric','d:a',{spend:999});
+  await stagePage(db,'order','metric',1,[{key:'d:a',data:{spend:8}}]);
+  await stagePage(db,'order','metric',2,[{key:'d:a',data:{spend:5}},{key:'d:a',data:{spend:2}}]);
+  const rows=(await db.prepare(stagedRowsSQL('metric')).bind('order','order').all()).results;
+  assert.equal(rows.length,1);assert.equal(JSON.parse(rows[0].data).spend,2);
+  assert.equal((await db.prepare(`SELECT count(*) n FROM (${stagedKeysSQL('metric')})`).bind('order','order').first()).n,1);
+ }finally{db.close();}
+});
 
 test('3600 contatos usam páginas compactas e a publicação idêntica não regrava cadastros',async()=>{
  const db=createDB();
