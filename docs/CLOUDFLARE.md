@@ -118,6 +118,6 @@ Configure `CRM_TOKEN`, `META_TOKEN` e `PSEUDONYM_KEY` como **secrets**, nunca co
 
 ## Alcance por período e filtro
 
-A migração `0002_reach.sql` habilita o cache de relatórios exatos. Ao selecionar um período/campanha/anúncio no painel, uma solicitação interna de relatório é registrada no D1. Isso **não executa uma importação nem consulta a Meta pelo navegador**. No ciclo seguinte, o mesmo Worker serializado consulta o escopo exato por GET e confirma o valor junto à atualização.
+A migração `0002_reach.sql` habilita o cache de relatórios exatos. Ao selecionar um período/campanha/anúncio no painel, uma solicitação interna de relatório é registrada no D1, com limitação de gravações repetidas por escopo a cada cinco minutos. Isso **não executa uma importação nem consulta a Meta pelo navegador**. No ciclo seguinte, o mesmo Worker serializado consulta o escopo exato por GET e confirma o valor junto à atualização. Falhas nessa gravação opcional não bloqueiam a leitura dos indicadores já confirmados.
 
 Até a primeira confirmação desse escopo, aparece “—”. Em caso de falha, o valor anterior do mesmo escopo permanece, com horário e aviso. Valores de outro período/filtro nunca são reutilizados. Alcance diário ou de campanhas/anúncios nunca é somado. Cada ciclo atende até 100 escopos solicitados recentemente, para limitar o trabalho.

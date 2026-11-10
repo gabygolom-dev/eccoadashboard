@@ -57,3 +57,17 @@ test('falha no alcance mantém o valor confirmado e cache de outro filtro não �
  const filtered=await makeReport({ECCOA_DB:db},new URL('https://test/api/report?start=2026-11-09&end=2026-11-09&campaign=campaign_test'));assert.equal(filtered.totals.reach,null);assert.equal(filtered.reachPending,true);
  }finally{db.close();}
 });
+
+test('falha na escrita opcional de alcance mantém métricas confirmadas disponíveis para novas sessões',async()=>{
+ const db=createDB();try{
+  await db.prepare("INSERT INTO runs(id,provider,state,cursor_json,started_at) VALUES('quota_meta','meta','running','{}','2026-11-09T10:15:00Z')").run();
+  await db.prepare("UPDATE sources SET active_run='quota_meta' WHERE provider='meta'").run();
+  await stage(db,'quota_meta','identity','meta',{conversationsValidated:true});
+  await stage(db,'quota_meta','metric','2026-11-09:a',{day:'2026-11-09',adId:'a',campaignId:'c',adsetId:'s',spend:25,impressions:1000,clicks:10,conversations:3});
+  await publishRun({ECCOA_DB:db},{id:'quota_meta',provider:'meta'},{start:'2026-11-09',end:'2026-11-09',done:true});
+  const readOnlyDB={prepare(sql){if(sql.startsWith('INSERT INTO reach_reports'))throw Error('D1_WRITE_LIMIT');return db.prepare(sql);}};
+  const report=await makeReport({ECCOA_DB:readOnlyDB},new URL('https://test/api/report?start=2026-11-09&end=2026-11-09'));
+  assert.equal(report.metaAvailable,true);assert.equal(report.totals.spend,25);assert.equal(report.totals.conversations,3);
+  assert.equal(report.totals.reach,null);assert.equal(report.reachError,'REACH_REQUEST_REGISTRATION_FAILED');
+ }finally{db.close();}
+});

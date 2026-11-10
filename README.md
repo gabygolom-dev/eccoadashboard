@@ -4,7 +4,11 @@ Dashboard em português e azul-marinho para tráfego pago e CRM Rugido. Publica�
 
 ## Estado
 
-Interface, autenticação, persistência, conectores restritos de leitura e fluxo de sincronização implementados. **CRM validado em leitura**: token e workspace Eccoa confirmados, paginação e campos de origem conferidos nas respostas reais. A ativação em produção ainda depende de secrets, D1, fila, Worker e Cron no Cloudflare. A conta Meta Eccoa, os campos, a paginação e a métrica de conversas foram validados por GET, cruzando anúncios com o CRM. Nenhum resultado fictício é exibido como dado real. Os arquivos oficiais das duas logos foram incluídos com proporção preservada.
+**Produção ativa:** [eccoadashboard.pages.dev](https://eccoadashboard.pages.dev/), com senha validada no servidor. CRM Rugido e Meta confirmados nas contas Eccoa; primeira importação e ciclos automáticos reais concluídos na Cloudflare em 10/11/2026. Paginação, deduplicação, origem datada, métricas e atribuição conferidas nas respostas reais. Nenhum resultado fictício é exibido como dado real.
+
+O cliente escolheu o plano gratuito. A sincronização usa snapshots compactos por página, grava somente mudanças e reutiliza históricos de conversas com versão estável, com revisão integral diária. Worker exclusivo `eccoa-dashboard-sync`, fila `eccoa-dashboard-jobs` e banco `eccoa-dashboard-db`. Cron `*/15 * * * *`; o painel consulta a última versão confirmada a cada minuto.
+
+O símbolo Rugido fornecido foi preservado; o símbolo Eccoa foi preparado a partir do print enviado, removendo o fundo do perfil. Vendas, faturamento e ROAS continuam indisponíveis, pois nenhuma fonte real de vendas foi validada. Prévias de anúncios não carregadas são indicadas explicitamente.
 
 ## Comandos
 
@@ -26,6 +30,8 @@ Use Node 22+. `npm run dev` serve uma prévia local em `http://localhost:8787/__
 - [Validação e pendências](docs/VALIDACAO.md).
 - [Migração D1 básica](migrations/0001.sql).
 - [Migração do cache de alcance](migrations/0002_reach.sql).
+- [Migração do cache de conversas](migrations/0003_conversation_cache.sql).
+- [Índices para o plano gratuito](migrations/0004_free_plan_indexes.sql).
 
 Repositório exclusivo: [gabygolom-dev/eccoadashboard](https://github.com/gabygolom-dev/eccoadashboard).
 

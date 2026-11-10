@@ -63,7 +63,7 @@ Para repetir a auditoria local, `node scripts/audit-crm.mjs /caminho/protegido/T
 - `attribution_spec` dos conjuntos é preservado quando retornado, e os valores efetivos devem ser conferidos na resposta real.
 - Cliques: `inline_link_clicks`; não são conversas.
 - Conversas: um único `action_type` comprovado, sem somar outras métricas de mensagens.
-- Atualizações posteriores revisitam os últimos 35 dias. `metric_revisions` mantém as versões confirmadas; a tabela atual substitui o intervalo em uma transação.
+- Atualizações posteriores revisitam o dia atual e os 35 dias anteriores. `metric_revisions` mantém revisões reais; a tabela atual reconcilia o intervalo em uma transação, preservando as linhas idênticas e o histórico fora desse intervalo.
 - Alcance usa `exactReach`: relatório sem incremento diário, no nível account/campaign/ad e com filtro exato. Exigimos uma única linha do escopo validado, nunca somamos alcance. As solicitações do painel ficam no D1 e são atendidas pelo próximo ciclo do Worker; o navegador não recebe token nem executa importações concorrentes. Falhas preservam o último valor confirmado do mesmo escopo.
 - Vendas/faturamento/ROAS permanecem indisponíveis sem fonte validada.
 

@@ -72,7 +72,9 @@ async function route(request,env,next) {
   }
   if(path==='/api/contact-history'){
     const id=url.searchParams.get('id');if(!/^[a-f0-9]{64}$/.test(id||''))return json({error:'Contato inválido.'},400);
-    const rows=await all(env.ECCOA_DB,'SELECT at,day,campaign_id campaignId,adset_id adsetId,ad_id adId,evidence FROM events WHERE contact_id=? ORDER BY at DESC LIMIT 200',id);
+    const rows=await all(env.ECCOA_DB,`SELECT e.at,e.day,COALESCE(e.campaign_id,json_extract(a.data,'$.campaignId')) campaignId,
+      COALESCE(e.adset_id,json_extract(a.data,'$.adsetId')) adsetId,e.ad_id adId,e.evidence
+      FROM events e LEFT JOIN ads a ON a.id=e.ad_id WHERE e.contact_id=? ORDER BY e.at DESC LIMIT 200`,id);
     return json({events:rows,limit:200});
   }
   if(path==='/api/config')return json({client:env.CLIENT_NAME||'Eccoa Saúde',brandsReady:true,crmWorkspace:env.CRM_WORKSPACE_NAME||null,metaAccount:`act_${ECCOA_META.accountId}`,metaVersion:ECCOA_META.apiVersion,timezone:'America/Sao_Paulo',schedule:'A cada 15 minutos, quando Worker e fila estiverem configurados.',passwordHours:8});

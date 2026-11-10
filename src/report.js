@@ -44,11 +44,13 @@ export async function makeReport(env,url) {
     GROUP_CONCAT(DISTINCT json_extract(data,'$.attributionSetting')) reportAttribution,MAX(json_extract(data,'$.campaignName')) campaignName,MAX(json_extract(data,'$.adsetName')) adsetName,MAX(json_extract(data,'$.adName')) adName
     FROM metrics WHERE ${clauses.join(' AND ')} GROUP BY ad_id,campaign_id,adset_id`,...metricArgs):null;
   const totals=aggregateMetrics(metrics,!!source.meta?.identity?.conversationsValidated);
-  let reachReport=null;
+  let reachReport=null,reachRegistrationError=null;
   if(filters.campaign!=='unknown'){
     if(filters.campaign.length>64||filters.ad.length>64)throw new Error('INVALID_SCOPE');
     const reachId=await digest(JSON.stringify([ECCOA_META.accountId,start,end,filters.campaign,filters.ad]));
-    await run(db,'INSERT INTO reach_reports(id,start,end,campaign_id,ad_id,requested_at) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET requested_at=excluded.requested_at',reachId,start,end,filters.campaign||null,filters.ad||null,now.toISOString());
+    try{
+      await run(db,'INSERT INTO reach_reports(id,start,end,campaign_id,ad_id,requested_at) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET requested_at=excluded.requested_at WHERE reach_reports.requested_at<?',reachId,start,end,filters.campaign||null,filters.ad||null,now.toISOString(),new Date(now.getTime()-5*60000).toISOString());
+    }catch{reachRegistrationError='REACH_REQUEST_REGISTRATION_FAILED';}
     reachReport=await first(db,'SELECT value,confirmed_at,error FROM reach_reports WHERE id=?',reachId);
   }
   const reachValue=metaAvailable&&reachReport?.confirmed_at?reachReport.value:null;
@@ -71,9 +73,9 @@ export async function makeReport(env,url) {
     generatedAt:now.toISOString(),lastCron:lastCron?.value||null,nextCron:new Date(Math.floor(Date.now()/900000)*900000+900000).toISOString(),
     crmAvailable:!!source.crm?.confirmed_at,metaAvailable,
     totals:{...totals,contacts:source.crm?.confirmed_at?counted.total:null,campaigns:source.crm?.confirmed_at?counted.campaigns:null,ads:source.crm?.confirmed_at?counted.ads:null,undated:source.crm?.confirmed_at?undated.total:null,reach:reachValue,costContact:source.crm?.confirmed_at?ratio(totals.spend,counted.total):null},
-    reachUpdatedAt:reachReport?.confirmed_at||null,reachPending:!reachReport?.confirmed_at,reachError:reachReport?.error||null,series,funnel,entries,campaignOptions,ads:ads.filter(a=>(!filters.campaign||a.campaignId===filters.campaign)&&(!filters.ad||a.id===filters.ad)),
+    reachUpdatedAt:reachReport?.confirmed_at||null,reachPending:!reachReport?.confirmed_at,reachError:reachReport?.error||reachRegistrationError,series,funnel,entries,campaignOptions,ads:ads.filter(a=>(!filters.campaign||a.campaignId===filters.campaign)&&(!filters.ad||a.id===filters.ad)),
     contacts:contacts.map(c=>({...c,label:`Contato ${c.contactId.slice(0,10)}`,campaignName:adMap.get(c.adId)?.campaignName||(c.campaignId?`Campanha ${c.campaignId}`:'Campanha não identificada'),adName:adMap.get(c.adId)?.name||(c.adId?`Anúncio ${c.adId}`:'Anúncio não identificado')})),
     pagination:{page,pageSize:50,total:source.crm?.confirmed_at?counted.total:0},
-    limitations:{reach:filters.campaign==='unknown'?'Alcance indisponível para campanha não identificada.':reachReport?.error?'Falha ao consultar alcance; a última confirmação desse escopo foi preservada.':reachReport?.confirmed_at?'Alcance obtido em relatório do período e escopo exatos, sem somar dias, campanhas ou anúncios.':'Alcance aguardando relatório do período e escopo exatos no próximo ciclo do servidor; não somamos alcance.',sales:'Vendas, faturamento, conversão em venda e ROAS indisponíveis: nenhuma fonte de vendas validada.',crmCoverage:source.crm?.confirmed_at?'Histórico confirmado pelas listagens paginadas; evidências anteriores não fornecidas pelo CRM não podem ser recuperadas.':'Aguardando primeira importação validada.',metaCoverage:metaAvailable?null:'Período sem cobertura completa confirmada da Meta. Métricas indisponíveis.'}
+    limitations:{reach:filters.campaign==='unknown'?'Alcance indisponível para campanha não identificada.':reachReport?.error||reachRegistrationError?'Falha ao consultar alcance; a última confirmação desse escopo foi preservada.':reachReport?.confirmed_at?'Alcance obtido em relatório do período e escopo exatos, sem somar dias, campanhas ou anúncios.':'Alcance aguardando relatório do período e escopo exatos no próximo ciclo do servidor; não somamos alcance.',sales:'Vendas, faturamento, conversão em venda e ROAS indisponíveis: nenhuma fonte de vendas validada.',crmCoverage:source.crm?.confirmed_at?'Histórico confirmado pelas listagens paginadas; evidências anteriores não fornecidas pelo CRM não podem ser recuperadas.':'Aguardando primeira importação validada.',metaCoverage:metaAvailable?null:'Período sem cobertura completa confirmada da Meta. Métricas indisponíveis.'}
   };
 }
