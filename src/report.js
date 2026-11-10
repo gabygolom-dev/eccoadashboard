@@ -26,11 +26,19 @@ export async function makeReport(env,url) {
   const ads=(await all(db,'SELECT data FROM ads')).map(x=>JSON.parse(x.data));
   const adMap=new Map(ads.map(a=>[a.id,a]));
   const {sql,args}=selectedSQL(filters),bind=[start,end,...args];
-  const counted=await first(db,`${sql} SELECT count(*) total,count(DISTINCT campaignId) campaigns,count(DISTINCT adId) ads FROM selected`,...bind);
-  const groups=await all(db,`${sql} SELECT campaignId,adsetId,adId,count(*) contacts FROM selected GROUP BY campaignId,adsetId,adId`,...bind);
-  const daily=await all(db,`${sql} SELECT day,count(*) contacts FROM selected GROUP BY day ORDER BY day`,...bind);
-  const funnel=await all(db,`${sql} SELECT COALESCE(c.stage_name,'Etapa não informada') name,count(*) contacts FROM selected s LEFT JOIN contacts c ON c.id=s.contactId GROUP BY name ORDER BY contacts DESC`,...bind);
-  const contacts=await all(db,`${sql} SELECT s.*,COALESCE(c.stage_name,'Etapa não informada') stage FROM selected s LEFT JOIN contacts c ON c.id=s.contactId ORDER BY at DESC LIMIT 50 OFFSET ?`,...bind,offset);
+  // Materialize the selected cohort once for all CRM summaries and pagination.
+  // Repeating its ranking in five independent queries multiplies Free-plan reads.
+  const counted=await first(db,`${sql} SELECT totals.*,
+    (SELECT json_group_array(json_object('campaignId',campaignId,'adsetId',adsetId,'adId',adId,'contacts',contacts))
+      FROM (SELECT campaignId,adsetId,adId,count(*) contacts FROM selected GROUP BY campaignId,adsetId,adId)) groups_json,
+    (SELECT json_group_array(json_object('day',day,'contacts',contacts))
+      FROM (SELECT day,count(*) contacts FROM selected GROUP BY day ORDER BY day)) daily_json,
+    (SELECT json_group_array(json_object('name',name,'contacts',contacts))
+      FROM (SELECT COALESCE(c.stage_name,'Etapa não informada') name,count(*) contacts FROM selected s LEFT JOIN contacts c ON c.id=s.contactId GROUP BY name ORDER BY contacts DESC)) funnel_json,
+    (SELECT json_group_array(json_object('id',id,'contactId',contactId,'at',at,'day',day,'campaignId',campaignId,'adsetId',adsetId,'adId',adId,'evidence',evidence,'rn',rn,'stage',stage))
+      FROM (SELECT s.*,COALESCE(c.stage_name,'Etapa não informada') stage FROM selected s LEFT JOIN contacts c ON c.id=s.contactId ORDER BY at DESC LIMIT 50 OFFSET ?)) contacts_json
+    FROM (SELECT count(*) total,count(DISTINCT campaignId) campaigns,count(DISTINCT adId) ads FROM selected) totals`,...bind,offset);
+  const groups=JSON.parse(counted.groups_json),daily=JSON.parse(counted.daily_json),funnel=JSON.parse(counted.funnel_json),contacts=JSON.parse(counted.contacts_json);
   const undated=await first(db,'SELECT count(*) total FROM contacts c WHERE undated=1 AND NOT EXISTS(SELECT 1 FROM events e WHERE e.contact_id=c.id)');
   const coverage=await first(db,'SELECT count(*) n FROM meta_coverage WHERE day BETWEEN ? AND ?',start,end);
   const expected=Math.round((Date.parse(end)-Date.parse(start))/86400000)+1;
