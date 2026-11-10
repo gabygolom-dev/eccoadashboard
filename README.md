@@ -4,7 +4,7 @@ Dashboard em português e azul-marinho para tráfego pago e CRM Rugido. Publica�
 
 ## Estado
 
-Interface, autenticação, persistência, conectores restritos de leitura e fluxo de sincronização implementados. **Integrações reais ainda não validadas**: aguardam credenciais, contrato da API do CRM, conta Meta e configuração dos recursos no Cloudflare. Nenhum resultado fictício é exibido como dado real. Logos oficiais aguardam fornecimento.
+Interface, autenticação, persistência, conectores restritos de leitura e fluxo de sincronização implementados. **CRM validado em leitura**: token e workspace Eccoa confirmados, paginação e campos de origem conferidos nas respostas reais. A ativação em produção ainda depende de secrets, D1, fila, Worker e Cron no Cloudflare. A Meta aguarda credencial e validação da conta. Nenhum resultado fictício é exibido como dado real. O símbolo oficial da Rugido foi incluído; a logo da Eccoa está pendente.
 
 ## Comandos
 

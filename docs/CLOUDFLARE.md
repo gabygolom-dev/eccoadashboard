@@ -72,10 +72,10 @@ Desative logs de conteúdo das requisições/respostas e não ative captura de m
 ## 6. Configuração não confidencial do Pages
 
 - `CLIENT_NAME=Eccoa Saúde`.
-- `CRM_WORKSPACE_NAME`: nome exato validado do workspace Eccoa.
+- `CRM_WORKSPACE_NAME=Eccoa Saúde`: nome exato validado do workspace Eccoa.
 - `META_ACCOUNT_ID`: apenas números, da conta validada Eccoa.
 - `META_API_VERSION`: versão confirmada na documentação oficial/resposta real.
-- `BRANDS_READY=true` somente depois de colocar as logos oficiais em `public/assets/rugido.svg` e `public/assets/eccoa.png`, com proporção original. Se os arquivos fornecidos tiverem outros formatos, ajustar os caminhos em `public/app.js`; não converter uma marca raster para um SVG falso.
+- `BRANDS_READY=true` somente depois de colocar a logo oficial Eccoa em `public/assets/eccoa.png`, com proporção original. O símbolo Rugido já está incluído como `public/assets/rugido-simbolo-oficial.png`, cópia integral do arquivo fornecido, exibido sem distorção e sem depender dessa variável. Se a logo Eccoa tiver outro formato, ajustar seu caminho em `public/app.js`; não converter uma marca raster para um SVG falso.
 
 Essas variáveis apenas identificam as conexões no painel; não concedem acesso às APIs.
 

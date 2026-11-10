@@ -20,12 +20,20 @@ Os testes usam dados sintéticos SOMENTE em `tests/`, em SQLite na memória. O p
 
 Prévia local sem dados fictícios conferida em 09/11/2026: visão geral, Campanhas e Anúncios; Hoje e intervalo personalizado até a data atual; botão Atualizar preservando o período; viewport móvel de 390 px sem transbordamento horizontal e viewport desktop de 1440 px. Nenhuma conta real foi acessada nessa conferência.
 
+## CRM e marca Rugido conferidos com os arquivos fornecidos
+
+Em 09/11/2026: token aceito em GET com `api_access_token`; workspace Eccoa confirmado por ID e nome. Cobertura completa de contatos conferida por IDs únicos até a página vazia, inclusive além do final indicado pela API. Todas as conversas e todas as páginas de mensagens disponíveis foram percorridas. Metadados `origem_anuncio.ad_id`, data original `external_created_at` e identificador externo foram conferidos em mensagens recebidas. Dicionário de etapas consultado em GET `/pipelines`.
+
+O símbolo oficial Rugido foi copiado integralmente do arquivo fornecido para `public/assets/rugido-simbolo-oficial.png`. Não houve redesenho, substituição pela letra R, corte ou alteração de proporção.
+
+A auditoria não importou dados na Cloudflare. Esses testes de leitura local não comprovam atualização automática no servidor, autenticação na URL publicada ou integração Meta.
+
 ## Pendente de acesso/material e validação em produção
 
-- Logos oficiais Rugido e Eccoa.
+- Logo oficial Eccoa.
 - Senha privada configurada no servidor.
-- Tokens protegidos, workspace Rugido e conta Meta Eccoa confirmados.
-- Contrato JSON real do Rugido e dicionário oficial das etapas.
+- Token Meta e conta Meta Eccoa confirmados; secret CRM instalado no Worker.
+- Primeiro ciclo do conector CRM na infraestrutura Cloudflare, com o contrato real já incluído.
 - Versão vigente da API Meta e action_type de conversas verificados oficialmente e na resposta real.
 - Bindings de D1, fila, Worker e Cron configurados pelo responsável no painel Cloudflare.
 - Primeiro ciclo real, ciclo automático seguinte e seus horários confirmados.

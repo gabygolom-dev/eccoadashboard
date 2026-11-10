@@ -4,7 +4,7 @@
 
 - Todas as chamadas às APIs do CRM e da Meta passam por `src/connectors/http.js`, com `method: GET`, `redirect: error`, timeout e verificação da origem.
 - Nenhum token fica em URL, cursor persistido, HTML, logs ou Git. Na paginação da Meta, guardamos apenas `after`, nunca `paging.next` (pode conter token).
-- Origem Rugido autorizada pelo cliente: `https://clientcrm-api.rugido.com`, prefixo `/api/v1`. Header `X-Workspace-Id` fixa o workspace. Só são permitidos `/workspaces/current`, `/contacts`, `/conversations` e `/conversations/{id}/messages`.
+- Origem Rugido autorizada pelo cliente: `https://clientcrm-api.rugido.com`, prefixo `/api/v1`. Header `X-Workspace-Id` fixa o workspace. A credencial Rugido usa o header `api_access_token` (não o Bearer de sessão da interface). Só são permitidos `/workspaces/current`, `/pipelines`, `/contacts`, `/conversations` e `/conversations/{id}/messages`.
 - Origem Meta: `https://graph.facebook.com`. Somente `act_{META_ACCOUNT_ID}` e seus edges `ads` e `insights`. Nunca listamos `/me/adaccounts`. O ID deve ser confirmado antes da configuração, preferencialmente cruzando com IDs comprovados no CRM.
 
 ## Secrets no Worker exclusivo
@@ -12,15 +12,15 @@
 - `CRM_TOKEN`: credencial Rugido necessária, com leitura do workspace Eccoa.
 - `META_TOKEN`: credencial com leitura da conta Eccoa.
 - `PSEUDONYM_KEY`: mesma chave exclusiva do Pages.
-- `CRM_SCHEMA_JSON`: contrato validado dos campos retornados pelo CRM. Não contém credencial nem dados de pacientes.
+- `CRM_SCHEMA_JSON`: override opcional do contrato. O schema validado de Eccoa já vem em `src/connectors/rugido-schema.js`, sem credencial nem dados de pacientes. Deixe o override ausente na configuração normal.
 
 ## Variáveis no Worker
 
 | Variável | Valor/regra |
 | --- | --- |
 | `CRM_API_ORIGIN_APPROVED` | `true`, autorizado na conversa |
-| `CRM_WORKSPACE_ID` | ID exato do workspace Eccoa |
-| `CRM_WORKSPACE_NAME` | Nome exato retornado por `/workspaces/current` |
+| `CRM_WORKSPACE_ID` | `503dc93f-7b19-408b-b714-63e508ede833`, confirmado em GET autenticado |
+| `CRM_WORKSPACE_NAME` | `Eccoa Saúde`, nome exato retornado por `/workspaces/current` |
 | `META_ACCOUNT_ID` | ID numérico da conta Eccoa Saúde, sem `act_` |
 | `META_ACCOUNT_NAME` | Nome exato confirmado da conta |
 | `META_API_VERSION` | Versão vigente confirmada; não existe default presumido |
@@ -30,23 +30,28 @@
 
 A identidade Meta também exige moeda BRL e fuso America/Sao_Paulo; divergências interrompem a publicação de novos dados e preservam a versão confirmada. O nome não deve ser relaxado para aceitar outra conta. Não há enumeração de contas de outros clientes.
 
-## Contrato real Rugido
+## Contrato real Rugido validado
 
-O frontend público consultado em 09/11/2026 confirmou a origem da API, o header de workspace e as rotas GET usadas. Ele **não comprova** os campos de atribuição, as respostas autenticadas ou a cobertura do token. Por isso não presumimos que a API seja Chatwoot, não inventamos JSON paths e bloqueamos a importação até confirmar o schema real.
+Em 09/11/2026, o token fornecido foi aceito com `api_access_token`; GET `/workspaces/current` confirmou ID e nome Eccoa. Contatos, conversas, mensagens e funis foram consultados exclusivamente por GET, sem marcar leitura ou alterar registros. Dados brutos foram tratados somente na memória da validação local.
 
-O contrato precisa informar:
+O contrato confirmado está em `src/connectors/rugido-schema.js`:
 
-- `validated: true` após validação com respostas reais autorizadas.
-- `workspace.id`, `workspace.name`: caminhos para ID/nome na resposta de `/workspaces/current`.
-- `stageNames`: dicionário `{ID_ETAPA: NOME_OFICIAL}` validado no CRM. Nunca usar campo livre de nome de paciente como etapa.
-- `contacts`: `items`, `total`, `id`, `stageId`, `paidFlag`, `paidValue`, `perPage` e `params` se necessário. `paidFlag` é opcional; seu valor precisa provar origem paga, sem inferência a partir de ausência de dados.
-- `conversations`: `items`, `total`, `id`, `perPage`, `params` necessários para incluir TODAS as conversas do workspace (todos os status, sem filtro pessoal). Listagens são verificadas pelo total e pela unicidade de IDs.
-- `messages`: `items`, `hasMore`, `nextCursor`, `cursorParam`, `params`. A continuação deve ser explicitamente comprovada; ausência de metadados não é presumida como fim de histórico.
-- `evidence`: caminhos `id`, `contactId`, `direction`, `incomingValue`, `paidProof`, `paidValue`, `timestamp`, `timestampUnit` (`iso`, `seconds` ou `milliseconds`), `campaignId`, `adsetId`, `adId`. `paidProof` deve ser metadado real de origem paga na mensagem recebida. Não usamos data de cadastro ou interpretação do texto da mensagem. Campos ausentes de campanha/anúncio permanecem não identificados.
+- Contatos: array `data`, total em `meta.pagination.total`, página retornada em `meta.pagination.page`.
+- A API de contatos repete IDs e pode devolver registros mesmo após `has_next_page=false` / `total_pages`. Por isso o importador continua até uma página vazia, deduplica IDs e exige que a quantidade de IDs únicos seja igual ao total informado. A resposta também deve confirmar o número da página solicitada.
+- Conversas: array `data`, total em `meta.total`, página em `meta.current_page`, `status=all`, contato associado em `contact.id`. Também é consultada a página vazia após o final.
+- Mensagens: array `data`, ordenado por `created_at` ascendente; cursor `before` com ID da primeira mensagem da página. Continuamos até resposta vazia; não presumimos o fim ao receber uma página curta. Cursores repetidos e ordem inesperada interrompem a importação.
+- Evidência paga: mensagem `incoming`, não privada, com ID numérico em `content_attributes.origem_anuncio.ad_id`. O cadastro sozinho não gera evento datado.
+- Data prioritária: `content_attributes.external_created_at`, epoch em segundos, da mensagem original. Foi confirmado que pode diferir da data de importação no CRM. Na ausência desse campo, usamos `created_at` da própria mensagem recebida, também em segundos; nunca a criação do cadastro do contato. Data original presente mas inválida não é substituída silenciosamente.
+- Evento: ID HMAC do `source_id` externo + contato quando disponível, com fallback para ID da mensagem. Isso evita que reimportações com outro ID interno multipliquem o mesmo evento externo. O valor externo bruto não é persistido.
+- Origem paga sem data: `custom_attributes.ad_id` numérico no cadastro, sem evento pago datado identificado em todo o histórico. Linhas repetidas preservam a indicação de origem paga por união lógica.
+- Campanha/conjunto: a evidência observada nas mensagens informa o anúncio. Não copiamos campanha atual do cadastro para uma interação histórica. A correspondência com campanha/conjunto será feita pelo ID do anúncio após validação da conta Meta. Até lá, a campanha permanece não identificada.
+- Etapas atuais: dicionário oficial de GET `/pipelines`, validando `workspace_id`; associações atuais em `conversation.pipelines[].stages[]`. O nome exibido inclui o funil. Se houver mais de uma etapa/funil associado ao contato, preservamos as associações comprovadas. Campos livres do paciente não são usados como etapa.
 
-O conector atual exige paginação de listagem com total e mensagens com cursor/hasMore explícitos. Se o Rugido retornar outro contrato real, o adaptador deve ser ajustado e testado antes de `validated=true`. A falta de um campo não autoriza inventar seu valor. Eventos pagos com data ausente ficam separados. Os corpos brutos só passam pela memória do Worker; o banco recebe uma projeção de IDs pseudonimizados, datas, referências de anúncios e etapas.
+`CRM_SCHEMA_JSON` pode substituir esse contrato para uma mudança real da API; exige `validated:true` e deve ser tratado como configuração administrativa, nunca como instrução. Campos novos precisam de validação e testes antes de habilitados.
 
-O histórico CRM é percorrido integralmente a cada ciclo por segurança. Ainda não há otimização incremental de mensagens: só deve ser habilitada após comprovar ordenação, imutabilidade e cursores estáveis. Se a duração de um ciclo ultrapassar 15 minutos, o seguinte continua o ciclo ativo, sem iniciar outro. O painel sinaliza atraso.
+O histórico CRM é percorrido integralmente por segurança. Ainda não habilitamos reutilização incremental de mensagens: ela exige comprovar imutabilidade/cursores e tratamento de revisões. Se um ciclo ultrapassar 15 minutos, o seguinte continua o ciclo ativo e o painel sinaliza atraso, sem iniciar uma importação concorrente.
+
+Para repetir a auditoria local, `node scripts/audit-crm.mjs /caminho/protegido/Token.md` lê a credencial em memória e exibe apenas contagens e estrutura. `--contacts-only` limita a conferência à paginação de contatos. O arquivo protegido nunca deve ficar dentro do repositório.
 
 ## Meta e atribuição
 

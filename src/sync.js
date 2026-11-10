@@ -1,5 +1,5 @@
 import {all,first,run,statement,stage,stageMany} from './db.js';
-import {crmConfig,crmRead,verifyWorkspace,pageItems,projectContact,projectEvent,messagePage} from './connectors/rugido.js';
+import {crmConfig,crmRead,verifyWorkspace,pageItems,projectContact,projectEvent,messagePage,projectPipelines,projectConversation} from './connectors/rugido.js';
 import {metaConfig,verifyMeta,adsPage,insightPage,syncRange} from './connectors/meta.js';
 import {getPath,safeId,addDays} from './domain.js';
 export async function startCycle(env,scheduledAt=new Date().toISOString()) {
@@ -56,7 +56,13 @@ export async function processJob(env,body) {
 }
 async function crmStep(env,job,c) {
   const s=crmConfig(env),db=env.ECCOA_DB;
-  if(!c.phase) {const identity=await verifyWorkspace(env,s);await stage(db,job.id,'identity','crm',identity);return {phase:'contacts',page:1,count:0};}
+  if(c.page>10000)throw new Error('CRM_PAGE_LIMIT_REACHED');
+  if(!c.phase) {const identity=await verifyWorkspace(env,s);await stage(db,job.id,'identity','crm',identity);return {phase:s.pipelines?'pipelines':'contacts',page:1,count:0};}
+  if(c.phase==='pipelines'){
+    const dictionary=projectPipelines(await crmRead(env,'/pipelines'),s.pipelines,env.CRM_WORKSPACE_ID);
+    await stage(db,job.id,'dictionary','stages',dictionary);
+    return {phase:'contacts',page:1,count:0};
+  }
   if(c.phase==='contacts'){
     const spec={...s.contacts,stageNames:s.stageNames};
     const d=await crmRead(env,'/contacts',{...(spec.params||{}),page:c.page,per_page:spec.perPage||100});
@@ -67,7 +73,7 @@ async function crmStep(env,job,c) {
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
     const unique=await first(db,"SELECT count(*) n FROM stage WHERE run_id=? AND kind='contact'",job.id);
-    if(count!==p.total||unique.n!==p.total)throw new Error('CRM_CONTACT_COVERAGE_INCOMPLETE');
+    if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONTACT_COVERAGE_INCOMPLETE');
     return {phase:'conversations',page:1,count:0};
   }
   if(c.phase==='conversations'){
@@ -75,21 +81,26 @@ async function crmStep(env,job,c) {
     const d=await crmRead(env,'/conversations',{...(spec.params||{}),page:c.page,per_page:spec.perPage||100});
     const p=pageItems(d,spec,c.page);
     if(c.total!==undefined&&c.total!==p.total)throw new Error('CRM_LIST_CHANGED_RETRY');
-    const conversations=p.items.map(raw=>{const id=safeId(getPath(raw,spec.id));if(!id)throw new Error('CRM_CONVERSATION_ID_MISSING');return {key:id,data:{id}};});
-    await stageMany(db,job.id,'conversation',conversations);
+    const dictionaryRow=await first(db,"SELECT data FROM stage WHERE run_id=? AND kind='dictionary' AND key='stages'",job.id);
+    const dictionary=dictionaryRow?JSON.parse(dictionaryRow.data):{};
+    const conversations=await Promise.all(p.items.map(raw=>projectConversation(raw,spec,env.PSEUDONYM_KEY,dictionary)));
+    await stageMany(db,job.id,'conversation',conversations.map(conv=>({key:conv.id,data:{id:conv.id,contactId:conv.contactId}})));
+    await stageMany(db,job.id,'contact_stage',conversations.flatMap(conv=>conv.stages.map(current=>({key:current.contactId+':'+current.stageId,data:current}))));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
     const unique=await first(db,"SELECT count(*) n FROM stage WHERE run_id=? AND kind='conversation'",job.id);
-    if(count!==p.total||unique.n!==p.total)throw new Error('CRM_CONVERSATION_COVERAGE_INCOMPLETE');
+    if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONVERSATION_COVERAGE_INCOMPLETE');
     return {phase:'messages',conversationAfter:'',messageCursor:null};
   }
   if(c.phase==='messages'){
-    const conv=await first(db,"SELECT key FROM stage WHERE run_id=? AND kind='conversation' AND key>? ORDER BY key LIMIT 1",job.id,c.conversationAfter);
+    const conv=await first(db,"SELECT key,data FROM stage WHERE run_id=? AND kind='conversation' AND key>? ORDER BY key LIMIT 1",job.id,c.conversationAfter);
     if(!conv)return {...c,done:true};
     const params={...(s.messages.params||{})};if(c.messageCursor)params[s.messages.cursorParam]=c.messageCursor;
     const data=await crmRead(env,`/conversations/${conv.key}/messages`,params);
     const p=messagePage(data,s.messages);
-    const projected=await Promise.all(p.items.map(raw=>projectEvent(raw,s.evidence,env.PSEUDONYM_KEY)));
+    const context={contactId:JSON.parse(conv.data).contactId,conversationId:conv.key};
+    if(p.items.some(raw=>raw.conversation_id!==conv.key))throw new Error('CRM_MESSAGE_CONVERSATION_MISMATCH');
+    const projected=await Promise.all(p.items.map(raw=>projectEvent(raw,s.evidence,env.PSEUDONYM_KEY,context)));
     await stageMany(db,job.id,'undated',projected.filter(e=>e?.undatedContact).map(e=>({key:e.undatedContact,data:{id:e.undatedContact}})));
     await stageMany(db,job.id,'event',projected.filter(e=>e&&!e.undatedContact).map(e=>({key:e.id,data:e})));
     if(p.next===c.messageCursor&&p.next)throw new Error('CRM_REPEATED_MESSAGE_CURSOR');
@@ -123,9 +134,11 @@ async function metaStep(env,job,c){
 export async function publishRun(env,job,c){
   const db=env.ECCOA_DB,at=new Date().toISOString(),stmts=[];
   if(job.provider==='crm'){
+    stmts.push(statement(db,"UPDATE contacts SET stage_id=NULL,stage_name='Etapa não informada'"));
     stmts.push(statement(db,`INSERT INTO contacts(id,stage_id,stage_name,undated,updated_at)
       SELECT key,json_extract(data,'$.stageId'),json_extract(data,'$.stageName'),json_extract(data,'$.undated'),? FROM stage WHERE run_id=? AND kind='contact'
       ON CONFLICT(id) DO UPDATE SET stage_id=excluded.stage_id,stage_name=excluded.stage_name,undated=excluded.undated,updated_at=excluded.updated_at`,at,job.id));
+    stmts.push(statement(db,`UPDATE contacts SET stage_id=(SELECT group_concat(DISTINCT json_extract(data,'$.stageId')) FROM stage WHERE run_id=? AND kind='contact_stage' AND json_extract(data,'$.contactId')=contacts.id),stage_name=(SELECT group_concat(DISTINCT json_extract(data,'$.stageName')) FROM stage WHERE run_id=? AND kind='contact_stage' AND json_extract(data,'$.contactId')=contacts.id) WHERE id IN (SELECT json_extract(data,'$.contactId') FROM stage WHERE run_id=? AND kind='contact_stage')`,job.id,job.id,job.id));
     stmts.push(statement(db,`INSERT INTO events(id,contact_id,at,day,campaign_id,adset_id,ad_id,evidence)
       SELECT key,json_extract(data,'$.contactId'),json_extract(data,'$.at'),json_extract(data,'$.day'),json_extract(data,'$.campaignId'),json_extract(data,'$.adsetId'),json_extract(data,'$.adId'),json_extract(data,'$.evidence') FROM stage WHERE run_id=? AND kind='event'
       ON CONFLICT(id) DO NOTHING`,job.id));

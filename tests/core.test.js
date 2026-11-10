@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {daySP,presetRange,validateRange,pickContacts,aggregateMetrics,metaActions,digest} from '../src/domain.js';
 import {readJSON,nextCursor} from '../src/connectors/http.js';
-import {projectEvent,pageItems,crmRead} from '../src/connectors/rugido.js';
+import {projectEvent,pageItems,messagePage,crmRead} from '../src/connectors/rugido.js';
 import {passwordRecord,verifyPassword,cookie,sessionToken} from '../src/auth.js';
 import {handlePages} from '../src/pages.js';
 import {publishRun,processJob,startCycle} from '../src/sync.js';
@@ -107,5 +107,54 @@ test('agendamento não inicia ciclos duplicados e falha preserva confirmação',
  assert.equal(messages.length,1);
  await processJob(env,{runId:id,provider:'crm'});
  assert.equal((await db.prepare("SELECT confirmed_at FROM sources WHERE provider='crm'").first()).confirmed_at,'2026-11-09T10:00:00Z');
+ }finally{db.close();}
+});
+
+
+test('Rugido usa api_access_token sem enviar Bearer de sessão',async()=>{
+ await readJSON('https://clientcrm-api.rugido.com/api/v1/workspaces/current',{origin:'https://clientcrm-api.rugido.com',token:'test-only-rugido',auth:'api_access_token',fetcher:async(url,opts)=>{assert.equal(opts.method,'GET');assert.equal(opts.redirect,'error');assert.equal(opts.headers.api_access_token,'test-only-rugido');assert.equal(opts.headers.Authorization,undefined);return Response.json({success:true,data:{}});}});
+ await assert.rejects(()=>readJSON('https://clientcrm-api.rugido.com/api/v1/workspaces/current',{origin:'https://clientcrm-api.rugido.com',token:'x',auth:'query'}),/AUTH_SCHEME_BLOCKED/);
+});
+
+test('paginação Rugido não para no total_pages incorreto e exige página retornada correta',()=>{
+ const spec={items:'data',total:'meta.total',responsePage:'meta.page',perPage:2,paginationMode:'until-empty'};
+ assert.equal(pageItems({data:[{id:'1'},{id:'1'}],meta:{total:2,page:2}},spec,2).next,3);
+ assert.equal(pageItems({data:[{id:'2'}],meta:{total:2,page:3}},spec,3).next,4);
+ assert.equal(pageItems({data:[],meta:{total:2,page:4}},spec,4).next,null);
+ assert.throws(()=>pageItems({data:[],meta:{total:2,page:1}},spec,4),/RESPONSE_PAGE_MISMATCH/);
+});
+
+test('mensagens Rugido usam before até resposta vazia e validam a ordenação',()=>{
+ const spec={items:'data',paginationMode:'before-empty',id:'id',orderTimestamp:'created_at'};
+ const page=messagePage({data:[{id:'first',created_at:10},{id:'last',created_at:20}]},spec);
+ assert.equal(page.next,'first');assert.equal(messagePage({data:[]},spec).next,null);
+ assert.throws(()=>messagePage({data:[{id:'last',created_at:20},{id:'first',created_at:10}]},spec),/ORDER_MISMATCH/);
+});
+
+test('origem_anuncio usa data original e identificador externo na deduplicação',async()=>{
+ const {RUGIDO_SCHEMA}=await import('../src/connectors/rugido-schema.js');
+ const raw={id:'message_1',source_id:'external_stable',sender_id:'contact_1',message_type:'incoming',created_at:Date.parse('2026-11-08T15:00Z')/1000,content_attributes:{external_created_at:Date.parse('2026-11-06T15:00Z')/1000,origem_anuncio:{ad_id:'123456789012345',source_app:'instagram'}}};
+ const first=await projectEvent(raw,RUGIDO_SCHEMA.evidence,secret),reimport=await projectEvent({...raw,id:'message_2'},RUGIDO_SCHEMA.evidence,secret);
+ assert.equal(first.day,'2026-11-06');assert.equal(first.id,reimport.id);assert.equal(first.campaignId,null);
+ await assert.rejects(()=>projectEvent(raw,RUGIDO_SCHEMA.evidence,secret,{contactId:'other-contact'}),/CONTACT_MISMATCH/);
+ assert.equal(await projectEvent({...raw,private:true},RUGIDO_SCHEMA.evidence,secret),null);
+ assert.equal(await projectEvent({...raw,content_attributes:{origem_anuncio:{ad_id:'not-an-ad'}}},RUGIDO_SCHEMA.evidence,secret),null);
+});
+
+test('etapas do CRM vêm do dicionário oficial e preservam múltiplos funis',async()=>{
+ const {projectPipelines,projectConversation}=await import('../src/connectors/rugido.js');
+ const dictionary=projectPipelines({data:[{id:'funnel_1',name:'Funil de Vendas',workspace_id:'workspace_1',stages:[{id:'stage_1',pipeline_id:'funnel_1',name:'Contato iniciado'}]}]},{items:'data'},'workspace_1');
+ const conv=await projectConversation({id:'conv_1',contact:{id:'contact_1'},pipelines:[{id:'funnel_1',stages:[{id:'stage_1',name:'NOME_NAO_CONFIAVEL'}]}]},{id:'id',contactId:'contact.id'},secret,dictionary);
+ assert.equal(conv.stages[0].stageName,'Funil de Vendas · Contato iniciado');
+ assert.throws(()=>projectPipelines({data:[{workspace_id:'other',stages:[]}]},{items:'data'},'workspace_1'),/WORKSPACE_MISMATCH/);
+});
+
+test('linhas de contato repetidas preservam origem paga e publicação de etapas é atômica',async()=>{
+ const {stageMany}=await import('../src/db.js');const db=createDB();try{
+ await completedRun(db,'crm_stages','crm');
+ await stageMany(db,'crm_stages','contact',[{key:'p1',data:{id:'p1',stageId:null,stageName:'Etapa não informada',undated:true}},{key:'p1',data:{id:'p1',stageId:null,stageName:'Etapa não informada',undated:false}}]);
+ await stageMany(db,'crm_stages','contact_stage',[{key:'p1:s1',data:{contactId:'p1',stageId:'s1',stageName:'Funil · Contato iniciado'}},{key:'p1:s2',data:{contactId:'p1',stageId:'s2',stageName:'Pacientes · Retorno agendado'}}]);
+ await publishRun({ECCOA_DB:db},{id:'crm_stages',provider:'crm'},{done:true});
+ const contact=await db.prepare('SELECT * FROM contacts WHERE id=?').bind('p1').first();assert.equal(contact.undated,1);assert.match(contact.stage_name,/Contato iniciado/);assert.match(contact.stage_name,/Retorno agendado/);
  }finally{db.close();}
 });

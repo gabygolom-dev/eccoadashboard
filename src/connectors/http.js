@@ -2,11 +2,13 @@
 export class UpstreamError extends Error {
   constructor(code,retryAfter=0) { super(code);this.retryAfter=retryAfter; }
 }
-export async function readJSON(url, {origin,token,headers={},fetcher=fetch}) {
+export async function readJSON(url, {origin,token,headers={},auth='bearer',fetcher=fetch}) {
   const u=new URL(url);
   if(u.origin!==origin || u.protocol!=='https:' || u.username || u.password || u.searchParams.has('access_token')) throw new UpstreamError('UPSTREAM_ORIGIN_BLOCKED');
+  if(!['bearer','api_access_token'].includes(auth))throw new UpstreamError('UPSTREAM_AUTH_SCHEME_BLOCKED');
+  const credential=auth==='api_access_token'?{api_access_token:token}:{Authorization:`Bearer ${token}`};
   let response;
-  try { response=await fetcher(u.href,{method:'GET',redirect:'error',headers:{Accept:'application/json',...headers,Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(25000)}); }
+  try { response=await fetcher(u.href,{method:'GET',redirect:'error',headers:{Accept:'application/json',...headers,...credential},signal:AbortSignal.timeout(25000)}); }
   catch { throw new UpstreamError('UPSTREAM_NETWORK_ERROR'); }
   if (!response.ok) {
     const retry=Math.min(3600,Math.max(0,Number(response.headers.get('retry-after'))||0));

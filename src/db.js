@@ -8,6 +8,6 @@ export async function stage(db,runId,kind,key,data) {
 
 export async function stageMany(db,runId,kind,items) {
   for(let i=0;i<items.length;i+=50){
-    await db.batch(items.slice(i,i+50).map(({key,data})=>statement(db,'INSERT INTO stage(run_id,kind,key,data) VALUES(?,?,?,?) ON CONFLICT(run_id,kind,key) DO UPDATE SET data=excluded.data',runId,kind,key,JSON.stringify(data))));
+    await db.batch(items.slice(i,i+50).map(({key,data})=>statement(db,'INSERT INTO stage(run_id,kind,key,data) VALUES(?,?,?,?) ON CONFLICT(run_id,kind,key) DO UPDATE SET data=CASE WHEN excluded.kind=\'contact\' THEN json_set(excluded.data,\'$.undated\',MAX(COALESCE(json_extract(stage.data,\'$.undated\'),0),COALESCE(json_extract(excluded.data,\'$.undated\'),0))) ELSE excluded.data END',runId,kind,key,JSON.stringify(data))));
   }
 }

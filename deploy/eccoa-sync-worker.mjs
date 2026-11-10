@@ -11,7 +11,7 @@ async function stage(db,runId,kind,key,data) {
 
 async function stageMany(db,runId,kind,items) {
   for(let i=0;i<items.length;i+=50){
-    await db.batch(items.slice(i,i+50).map(({key,data})=>statement(db,'INSERT INTO stage(run_id,kind,key,data) VALUES(?,?,?,?) ON CONFLICT(run_id,kind,key) DO UPDATE SET data=excluded.data',runId,kind,key,JSON.stringify(data))));
+    await db.batch(items.slice(i,i+50).map(({key,data})=>statement(db,'INSERT INTO stage(run_id,kind,key,data) VALUES(?,?,?,?) ON CONFLICT(run_id,kind,key) DO UPDATE SET data=CASE WHEN excluded.kind=\'contact\' THEN json_set(excluded.data,\'$.undated\',MAX(COALESCE(json_extract(stage.data,\'$.undated\'),0),COALESCE(json_extract(excluded.data,\'$.undated\'),0))) ELSE excluded.data END',runId,kind,key,JSON.stringify(data))));
   }
 }
 
@@ -21,11 +21,13 @@ async function stageMany(db,runId,kind,items) {
 class UpstreamError extends Error {
   constructor(code,retryAfter=0) { super(code);this.retryAfter=retryAfter; }
 }
-async function readJSON(url, {origin,token,headers={},fetcher=fetch}) {
+async function readJSON(url, {origin,token,headers={},auth='bearer',fetcher=fetch}) {
   const u=new URL(url);
   if(u.origin!==origin || u.protocol!=='https:' || u.username || u.password || u.searchParams.has('access_token')) throw new UpstreamError('UPSTREAM_ORIGIN_BLOCKED');
+  if(!['bearer','api_access_token'].includes(auth))throw new UpstreamError('UPSTREAM_AUTH_SCHEME_BLOCKED');
+  const credential=auth==='api_access_token'?{api_access_token:token}:{Authorization:`Bearer ${token}`};
   let response;
-  try { response=await fetcher(u.href,{method:'GET',redirect:'error',headers:{Accept:'application/json',...headers,Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(25000)}); }
+  try { response=await fetcher(u.href,{method:'GET',redirect:'error',headers:{Accept:'application/json',...headers,...credential},signal:AbortSignal.timeout(25000)}); }
   catch { throw new UpstreamError('UPSTREAM_NETWORK_ERROR'); }
   if (!response.ok) {
     const retry=Math.min(3600,Math.max(0,Number(response.headers.get('retry-after'))||0));
@@ -47,6 +49,21 @@ function nextCursor(data,origin,accountId) {
   // Never persist paging.next, which may contain an access token.
   return after;
 }
+
+
+// src/connectors/rugido-schema.js
+// Contract confirmed using GET responses from the authorized Eccoa workspace.
+// This file contains schema/field names only, never credentials or patient data.
+const RUGIDO_SCHEMA = {
+  validated:true,
+  workspace:{id:'data.id',name:'data.name'},
+  stageNames:{},
+  pipelines:{items:'data'},
+  contacts:{items:'data',total:'meta.pagination.total',responsePage:'meta.pagination.page',id:'id',perPage:100,paginationMode:'until-empty',allowDuplicateIds:true,paidIdPath:'custom_attributes.ad_id'},
+  conversations:{items:'data',total:'meta.total',responsePage:'meta.current_page',id:'id',contactId:'contact.id',perPage:100,paginationMode:'until-empty',params:{status:'all'}},
+  messages:{items:'data',id:'id',paginationMode:'before-empty',orderTimestamp:'created_at',cursorParam:'before'},
+  evidence:{id:'id',externalId:'source_id',contactId:'sender_id',direction:'message_type',incomingValue:'incoming',paidIdPath:'content_attributes.origem_anuncio.ad_id',adId:'content_attributes.origem_anuncio.ad_id',timestamp:'content_attributes.external_created_at',timestampUnit:'seconds',timestampFallback:'created_at',timestampFallbackUnit:'seconds'}
+};
 
 
 // src/domain.js
@@ -122,21 +139,22 @@ async function pseudonym(key,value) {
 // src/connectors/rugido.js
 
 
+
 const ORIGIN='https://clientcrm-api.rugido.com';
 // Field paths MUST be confirmed against a real, authorized Eccoa response.
 function crmConfig(env) {
   if(env.CRM_API_ORIGIN_APPROVED!=='true') throw new Error('CRM_ORIGIN_NOT_APPROVED');
   if(!env.CRM_TOKEN||!safeId(env.CRM_WORKSPACE_ID)||!env.CRM_WORKSPACE_NAME||!env.PSEUDONYM_KEY) throw new Error('CRM_CONFIGURATION_REQUIRED');
-  let s;try{s=JSON.parse(env.CRM_SCHEMA_JSON);}catch{throw new Error('CRM_SCHEMA_NOT_VALIDATED');}
+  let s;try{s=env.CRM_SCHEMA_JSON?JSON.parse(env.CRM_SCHEMA_JSON):structuredClone(RUGIDO_SCHEMA);}catch{throw new Error('CRM_SCHEMA_NOT_VALIDATED');}
   if(s.validated!==true||!s.contacts||!s.conversations||!s.messages||!s.workspace||!s.evidence||!s.stageNames) throw new Error('CRM_SCHEMA_NOT_VALIDATED');
   return s;
 }
 async function crmRead(env,path,params={}) {
   if(env.CRM_API_ORIGIN_APPROVED!=='true') throw new Error('CRM_ORIGIN_NOT_APPROVED');
-  if(!/^\/(workspaces\/current|contacts|conversations(?:\/[A-Za-z0-9_-]+\/messages)?)$/.test(path)) throw new Error('CRM_ENDPOINT_BLOCKED');
+  if(!/^\/(workspaces\/current|pipelines|contacts|conversations(?:\/[A-Za-z0-9_-]+\/messages)?)$/.test(path)) throw new Error('CRM_ENDPOINT_BLOCKED');
   const u=new URL(`/api/v1${path}`,ORIGIN);
   for(const [k,v] of Object.entries(params))if(v!==null&&v!==undefined)u.searchParams.set(k,String(v));
-  return readJSON(u,{origin:ORIGIN,token:env.CRM_TOKEN,headers:{'X-Workspace-Id':env.CRM_WORKSPACE_ID}});
+  return readJSON(u,{origin:ORIGIN,token:env.CRM_TOKEN,auth:'api_access_token',headers:{'X-Workspace-Id':env.CRM_WORKSPACE_ID}});
 }
 async function verifyWorkspace(env,s) {
   const data=await crmRead(env,'/workspaces/current');
@@ -149,6 +167,11 @@ function pageItems(data,s,page) {
   const total=Number(getPath(data,s.total));
   if(!Array.isArray(items)||!Number.isInteger(total)||total<0)throw new Error('CRM_PAGINATION_SCHEMA_MISMATCH');
   const per=s.perPage||100;
+  if(s.responsePage&&Number(getPath(data,s.responsePage))!==page)throw new Error('CRM_RESPONSE_PAGE_MISMATCH');
+  if(s.paginationMode==='until-empty'){
+    if(items.length>per)throw new Error('CRM_PAGINATION_SCHEMA_MISMATCH');
+    return {items,total,next:items.length?page+1:null};
+  }
   if(items.length>per||(items.length!==per&&page*per<total))throw new Error('CRM_PAGINATION_INCOMPLETE');
   return {items,total,next:page*per<total?page+1:null};
 }
@@ -157,31 +180,69 @@ async function projectContact(raw,s,key) {
   const stageId=safeId(getPath(raw,s.stageId));
   // Store only labels from the validated pipeline dictionary, never free patient fields.
   const stageName=stageId&&s.stageNames?.[stageId]||'Etapa não informada';
-  const undated=s.paidFlag ? getPath(raw,s.paidFlag)===s.paidValue : false;
+  const undated=s.paidIdPath ? /^\d{5,25}$/.test(String(getPath(raw,s.paidIdPath)||'')) : s.paidFlag ? getPath(raw,s.paidFlag)===s.paidValue : false;
   return {id:await pseudonym(key,id),stageId,stageName,undated};
 }
-async function projectEvent(raw,s,key) {
+async function projectEvent(raw,s,key,context={}) {
   const id=safeId(getPath(raw,s.id)), contactId=safeId(getPath(raw,s.contactId));
   if(!id)throw new Error('CRM_MESSAGE_ID_MISSING');
   // Require inbound + an explicit verified paid-evidence field. Never parse message text.
-  if(getPath(raw,s.direction)!==s.incomingValue||getPath(raw,s.paidProof)!==s.paidValue)return null;
+  if(raw.private===true||getPath(raw,s.direction)!==s.incomingValue)return null;
+  const paid=s.paidIdPath?/^\d{5,25}$/.test(String(getPath(raw,s.paidIdPath)||'')):!!s.paidProof&&getPath(raw,s.paidProof)===s.paidValue;
+  if(!paid)return null;
   if(!contactId)throw new Error('CRM_EVENT_CONTACT_MISSING');
-  const at=timestamp(getPath(raw,s.timestamp),s.timestampUnit);
+  const primary=getPath(raw,s.timestamp);
+  const at=primary!==undefined&&primary!==null?timestamp(primary,s.timestampUnit):timestamp(getPath(raw,s.timestampFallback),s.timestampFallbackUnit);
   const adId=safeId(getPath(raw,s.adId));
   const campaignId=safeId(getPath(raw,s.campaignId));
   const adsetId=safeId(getPath(raw,s.adsetId));
   const contact=await pseudonym(key,contactId);
+  if(context.contactId&&context.contactId!==contact)throw new Error('CRM_MESSAGE_CONTACT_MISMATCH');
+  if(context.conversationId&&raw.conversation_id!==context.conversationId)throw new Error('CRM_MESSAGE_CONVERSATION_MISMATCH');
   if(!at)return {undatedContact:contact};
-  return {id:await pseudonym(key,`message:${id}`),contactId:contact,at,day:daySP(at),campaignId,adsetId,adId,evidence:'Mensagem recebida com referência paga'};
+  const external=s.externalId?getPath(raw,s.externalId):null;
+  const eventKey=typeof external==='string'&&external.length>0&&external.length<=2048?`external:${contact}:${external}`:`message:${id}`;
+  return {id:await pseudonym(key,eventKey),contactId:contact,at,day:daySP(at),campaignId,adsetId,adId,evidence:'Mensagem recebida com referência paga'};
 }
 function messagePage(data,s) {
   const items=getPath(data,s.items);
   if(!Array.isArray(items))throw new Error('CRM_MESSAGES_SCHEMA_MISMATCH');
+  if(s.paginationMode==='before-empty'){
+    if(!items.length)return {items,next:null};
+    if(s.orderTimestamp&&items.some((m,i)=>i>0&&Number(getPath(m,s.orderTimestamp))<Number(getPath(items[i-1],s.orderTimestamp))))throw new Error('CRM_MESSAGE_ORDER_MISMATCH');
+    const next=safeId(getPath(items[0],s.id));
+    if(!next)throw new Error('CRM_MESSAGES_CURSOR_MISSING');
+    return {items,next};
+  }
   const hasMore=getPath(data,s.hasMore);
   if(typeof hasMore!=='boolean')throw new Error('CRM_MESSAGES_PAGINATION_UNVERIFIED');
   const next=hasMore?getPath(data,s.nextCursor):null;
   if(hasMore&&!next)throw new Error('CRM_MESSAGES_CURSOR_MISSING');
   return {items,next};
+}
+
+function projectPipelines(data,s,workspaceId){
+  const items=getPath(data,s.items);if(!Array.isArray(items))throw new Error('CRM_PIPELINE_SCHEMA_MISMATCH');
+  const stages={};
+  for(const p of items){
+    if(p.workspace_id!==workspaceId||!Array.isArray(p.stages))throw new Error('CRM_PIPELINE_WORKSPACE_MISMATCH');
+    for(const stage of p.stages){
+      if(stage.pipeline_id!==p.id||!safeId(stage.id)||typeof stage.name!=='string'||typeof p.name!=='string')throw new Error('CRM_STAGE_SCHEMA_MISMATCH');
+      stages[stage.id]={id:stage.id,name:stage.name,pipelineId:p.id,pipelineName:p.name};
+    }
+  }
+  return stages;
+}
+async function projectConversation(raw,s,key,dictionary){
+  const id=safeId(getPath(raw,s.id)),rawContact=safeId(getPath(raw,s.contactId));
+  if(!id||!rawContact)throw new Error('CRM_CONVERSATION_CONTACT_MISSING');
+  const contactId=await pseudonym(key,rawContact),stages=[];
+  for(const pipeline of raw.pipelines||[])for(const current of pipeline.stages||[]){
+    const stage=dictionary[current.id];
+    if(!stage||stage.pipelineId!==pipeline.id)throw new Error('CRM_CURRENT_STAGE_MISMATCH');
+    stages.push({contactId,stageId:stage.id,stageName:stage.pipelineName+' · '+stage.name});
+  }
+  return {id,contactId,stages};
 }
 
 
@@ -288,7 +349,13 @@ async function processJob(env,body) {
 }
 async function crmStep(env,job,c) {
   const s=crmConfig(env),db=env.ECCOA_DB;
-  if(!c.phase) {const identity=await verifyWorkspace(env,s);await stage(db,job.id,'identity','crm',identity);return {phase:'contacts',page:1,count:0};}
+  if(c.page>10000)throw new Error('CRM_PAGE_LIMIT_REACHED');
+  if(!c.phase) {const identity=await verifyWorkspace(env,s);await stage(db,job.id,'identity','crm',identity);return {phase:s.pipelines?'pipelines':'contacts',page:1,count:0};}
+  if(c.phase==='pipelines'){
+    const dictionary=projectPipelines(await crmRead(env,'/pipelines'),s.pipelines,env.CRM_WORKSPACE_ID);
+    await stage(db,job.id,'dictionary','stages',dictionary);
+    return {phase:'contacts',page:1,count:0};
+  }
   if(c.phase==='contacts'){
     const spec={...s.contacts,stageNames:s.stageNames};
     const d=await crmRead(env,'/contacts',{...(spec.params||{}),page:c.page,per_page:spec.perPage||100});
@@ -299,7 +366,7 @@ async function crmStep(env,job,c) {
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
     const unique=await first(db,"SELECT count(*) n FROM stage WHERE run_id=? AND kind='contact'",job.id);
-    if(count!==p.total||unique.n!==p.total)throw new Error('CRM_CONTACT_COVERAGE_INCOMPLETE');
+    if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONTACT_COVERAGE_INCOMPLETE');
     return {phase:'conversations',page:1,count:0};
   }
   if(c.phase==='conversations'){
@@ -307,21 +374,26 @@ async function crmStep(env,job,c) {
     const d=await crmRead(env,'/conversations',{...(spec.params||{}),page:c.page,per_page:spec.perPage||100});
     const p=pageItems(d,spec,c.page);
     if(c.total!==undefined&&c.total!==p.total)throw new Error('CRM_LIST_CHANGED_RETRY');
-    const conversations=p.items.map(raw=>{const id=safeId(getPath(raw,spec.id));if(!id)throw new Error('CRM_CONVERSATION_ID_MISSING');return {key:id,data:{id}};});
-    await stageMany(db,job.id,'conversation',conversations);
+    const dictionaryRow=await first(db,"SELECT data FROM stage WHERE run_id=? AND kind='dictionary' AND key='stages'",job.id);
+    const dictionary=dictionaryRow?JSON.parse(dictionaryRow.data):{};
+    const conversations=await Promise.all(p.items.map(raw=>projectConversation(raw,spec,env.PSEUDONYM_KEY,dictionary)));
+    await stageMany(db,job.id,'conversation',conversations.map(conv=>({key:conv.id,data:{id:conv.id,contactId:conv.contactId}})));
+    await stageMany(db,job.id,'contact_stage',conversations.flatMap(conv=>conv.stages.map(current=>({key:current.contactId+':'+current.stageId,data:current}))));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
     const unique=await first(db,"SELECT count(*) n FROM stage WHERE run_id=? AND kind='conversation'",job.id);
-    if(count!==p.total||unique.n!==p.total)throw new Error('CRM_CONVERSATION_COVERAGE_INCOMPLETE');
+    if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONVERSATION_COVERAGE_INCOMPLETE');
     return {phase:'messages',conversationAfter:'',messageCursor:null};
   }
   if(c.phase==='messages'){
-    const conv=await first(db,"SELECT key FROM stage WHERE run_id=? AND kind='conversation' AND key>? ORDER BY key LIMIT 1",job.id,c.conversationAfter);
+    const conv=await first(db,"SELECT key,data FROM stage WHERE run_id=? AND kind='conversation' AND key>? ORDER BY key LIMIT 1",job.id,c.conversationAfter);
     if(!conv)return {...c,done:true};
     const params={...(s.messages.params||{})};if(c.messageCursor)params[s.messages.cursorParam]=c.messageCursor;
     const data=await crmRead(env,`/conversations/${conv.key}/messages`,params);
     const p=messagePage(data,s.messages);
-    const projected=await Promise.all(p.items.map(raw=>projectEvent(raw,s.evidence,env.PSEUDONYM_KEY)));
+    const context={contactId:JSON.parse(conv.data).contactId,conversationId:conv.key};
+    if(p.items.some(raw=>raw.conversation_id!==conv.key))throw new Error('CRM_MESSAGE_CONVERSATION_MISMATCH');
+    const projected=await Promise.all(p.items.map(raw=>projectEvent(raw,s.evidence,env.PSEUDONYM_KEY,context)));
     await stageMany(db,job.id,'undated',projected.filter(e=>e?.undatedContact).map(e=>({key:e.undatedContact,data:{id:e.undatedContact}})));
     await stageMany(db,job.id,'event',projected.filter(e=>e&&!e.undatedContact).map(e=>({key:e.id,data:e})));
     if(p.next===c.messageCursor&&p.next)throw new Error('CRM_REPEATED_MESSAGE_CURSOR');
@@ -355,9 +427,11 @@ async function metaStep(env,job,c){
 async function publishRun(env,job,c){
   const db=env.ECCOA_DB,at=new Date().toISOString(),stmts=[];
   if(job.provider==='crm'){
+    stmts.push(statement(db,"UPDATE contacts SET stage_id=NULL,stage_name='Etapa não informada'"));
     stmts.push(statement(db,`INSERT INTO contacts(id,stage_id,stage_name,undated,updated_at)
       SELECT key,json_extract(data,'$.stageId'),json_extract(data,'$.stageName'),json_extract(data,'$.undated'),? FROM stage WHERE run_id=? AND kind='contact'
       ON CONFLICT(id) DO UPDATE SET stage_id=excluded.stage_id,stage_name=excluded.stage_name,undated=excluded.undated,updated_at=excluded.updated_at`,at,job.id));
+    stmts.push(statement(db,`UPDATE contacts SET stage_id=(SELECT group_concat(DISTINCT json_extract(data,'$.stageId')) FROM stage WHERE run_id=? AND kind='contact_stage' AND json_extract(data,'$.contactId')=contacts.id),stage_name=(SELECT group_concat(DISTINCT json_extract(data,'$.stageName')) FROM stage WHERE run_id=? AND kind='contact_stage' AND json_extract(data,'$.contactId')=contacts.id) WHERE id IN (SELECT json_extract(data,'$.contactId') FROM stage WHERE run_id=? AND kind='contact_stage')`,job.id,job.id,job.id));
     stmts.push(statement(db,`INSERT INTO events(id,contact_id,at,day,campaign_id,adset_id,ad_id,evidence)
       SELECT key,json_extract(data,'$.contactId'),json_extract(data,'$.at'),json_extract(data,'$.day'),json_extract(data,'$.campaignId'),json_extract(data,'$.adsetId'),json_extract(data,'$.adId'),json_extract(data,'$.evidence') FROM stage WHERE run_id=? AND kind='event'
       ON CONFLICT(id) DO NOTHING`,job.id));
