@@ -6,7 +6,7 @@ Dashboard em português e azul-marinho para tráfego pago e CRM Rugido. Publica�
 
 **Produção ativa:** [eccoadashboard.pages.dev](https://eccoadashboard.pages.dev/), com senha validada no servidor. CRM Rugido e Meta confirmados nas contas Eccoa; primeira importação e ciclos automáticos reais concluídos na Cloudflare em 10/11/2026. Paginação, deduplicação, origem datada, métricas e atribuição conferidas nas respostas reais. Nenhum resultado fictício é exibido como dado real.
 
-O cliente escolheu o plano gratuito. A sincronização usa snapshots compactos por página, grava somente mudanças e reutiliza históricos de conversas com versão estável, com revisão integral diária. Worker exclusivo `eccoa-dashboard-sync`, fila `eccoa-dashboard-jobs` e banco `eccoa-dashboard-db`. Cron `*/15 * * * *`; o painel consulta a última versão confirmada a cada minuto.
+O cliente escolheu o plano gratuito. A sincronização usa snapshots compactos por página, compara contatos e etapas em memória com o último snapshot confirmado e grava somente mudanças e reutiliza históricos de conversas com versão estável, com revisão integral diária. Worker exclusivo `eccoa-dashboard-sync`, fila `eccoa-dashboard-jobs` e banco `eccoa-dashboard-db`. Cron `*/15 * * * *`; o painel consulta a última versão confirmada a cada minuto.
 
 O símbolo Rugido fornecido foi preservado; o símbolo Eccoa foi preparado a partir do print enviado, removendo o fundo do perfil. Vendas, faturamento e ROAS continuam indisponíveis, pois nenhuma fonte real de vendas foi validada. Prévias de anúncios não carregadas são indicadas explicitamente.
 
@@ -28,6 +28,7 @@ Use Node 22+. `npm run dev` serve uma prévia local em `http://localhost:8787/__
 - [Configuração Cloudflare passo a passo](docs/CLOUDFLARE.md).
 - [Contrato das integrações e renovação dos tokens](docs/INTEGRACOES.md).
 - [Validação em produção](docs/VALIDACAO.md).
+- [Redução do consumo D1 e cotas](docs/OTIMIZACAO-COTAS.md).
 - [Migração D1 básica](migrations/0001.sql).
 - [Migração do cache de alcance](migrations/0002_reach.sql).
 - [Migração do cache de conversas](migrations/0003_conversation_cache.sql).

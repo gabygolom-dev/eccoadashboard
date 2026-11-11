@@ -46,7 +46,7 @@ test('3600 contatos usam páginas compactas e a publicação idêntica não regr
   assert.equal((await db.prepare("SELECT updated_at FROM contacts WHERE id='p0'").first()).updated_at,first.updated_at);
   stages.splice(1,1);await snapshot('c3');const beforeStage=changes(db);
   await publishRun({ECCOA_DB:db},{id:'c3',provider:'crm'},{done:true});
-  assert.equal(changes(db)-beforeStage,3);assert.equal((await db.prepare("SELECT stage_name FROM contacts WHERE id='p0'").first()).stage_name,'Funil A · Contato');
+  assert.equal(changes(db)-beforeStage,4); // Contact, snapshot, run and source.assert.equal((await db.prepare("SELECT stage_name FROM contacts WHERE id='p0'").first()).stage_name,'Funil A · Contato');
  }finally{db.close();}
 });
 

@@ -1,7 +1,8 @@
-import {all,first,run,statement,stage,stageMany,stageMissingAds,stagePage,stagedRowsSQL,stagedKeysSQL} from './db.js';
+import {all,first,run,statement,stage,stageMany,stageMissingAds,stagePage,stagedRowsSQL} from './db.js';
 import {crmConfig,crmRead,verifyWorkspace,pageItems,projectContact,projectEvent,messagePage,projectPipelines,projectConversation,conversationNeedsScan} from './connectors/rugido.js';
 import {metaConfig,verifyMeta,adsPage,insightPage,syncRange,exactReach} from './connectors/meta.js';
 import {getPath,safeId,addDays} from './domain.js';
+import {readCrmSnapshot,contactDeltaStatements} from './crm-snapshot.js';
 export async function startCycle(env,scheduledAt=new Date().toISOString()) {
   await run(env.ECCOA_DB,"INSERT INTO settings(key,value) VALUES('lastCron',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",scheduledAt);
   for(const provider of ['crm','meta']) {
@@ -74,7 +75,7 @@ async function crmStep(env,job,c) {
     await stagePage(db,job.id,'contact',job.pages,contacts.map(contact=>({key:contact.id,data:contact})));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
-    const unique=await first(db,`SELECT count(*) n FROM (${stagedKeysSQL('contact')})`,job.id,job.id);
+    const unique={n:(await readCrmSnapshot(db,job.id,'contact')).size};
     if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONTACT_COVERAGE_INCOMPLETE');
     return {phase:'conversations',page:1,count:0};
   }
@@ -105,7 +106,7 @@ async function crmStep(env,job,c) {
     await stagePage(db,job.id,'contact_stage',job.pages,conversations.flatMap(conv=>conv.stages.map(current=>({key:current.contactId+':'+current.stageId,data:current}))));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
-    const unique=await first(db,`SELECT count(*) n FROM (${stagedKeysSQL('conversation')})`,job.id,job.id);
+    const unique={n:(await readCrmSnapshot(db,job.id,'conversation')).size};
     if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONVERSATION_COVERAGE_INCOMPLETE');
     return {phase:'messages',conversationAfter:'',messageCursor:null};
   }
@@ -167,17 +168,7 @@ async function metaStep(env,job,c){
 export async function publishRun(env,job,c){
   const db=env.ECCOA_DB,at=new Date().toISOString(),stmts=[];
   if(job.provider==='crm'){
-    const contactRows=stagedRowsSQL('contact'),stageRows=stagedRowsSQL('contact_stage');
-    stmts.push(statement(db,`UPDATE contacts SET stage_id=NULL,stage_name='Etapa não informada'
-      WHERE (stage_id IS NOT NULL OR stage_name<>'Etapa não informada') AND id NOT IN(${stagedKeysSQL('contact')})`,job.id,job.id));
-    stmts.push(statement(db,`WITH incoming AS (${contactRows}),stages AS (${stageRows}),
-      grouped AS (SELECT json_extract(data,'$.contactId') contact_id,group_concat(DISTINCT json_extract(data,'$.stageId')) stage_id,
-      group_concat(DISTINCT json_extract(data,'$.stageName')) stage_name FROM stages GROUP BY json_extract(data,'$.contactId'))
-      INSERT INTO contacts(id,stage_id,stage_name,undated,updated_at)
-      SELECT i.key,COALESCE(g.stage_id,json_extract(i.data,'$.stageId')),COALESCE(g.stage_name,json_extract(i.data,'$.stageName'),'Etapa não informada'),json_extract(i.data,'$.undated'),?
-      FROM incoming i LEFT JOIN grouped g ON g.contact_id=i.key WHERE true
-      ON CONFLICT(id) DO UPDATE SET stage_id=excluded.stage_id,stage_name=excluded.stage_name,undated=excluded.undated,updated_at=excluded.updated_at
-      WHERE contacts.stage_id IS NOT excluded.stage_id OR contacts.stage_name IS NOT excluded.stage_name OR contacts.undated IS NOT excluded.undated`,job.id,job.id,job.id,job.id,at));
+    stmts.push(...await contactDeltaStatements(db,job.id,at));
     stmts.push(statement(db,`INSERT INTO events(id,contact_id,at,day,campaign_id,adset_id,ad_id,evidence)
       SELECT key,json_extract(data,'$.contactId'),json_extract(data,'$.at'),json_extract(data,'$.day'),json_extract(data,'$.campaignId'),json_extract(data,'$.adsetId'),json_extract(data,'$.adId'),json_extract(data,'$.evidence') FROM stage WHERE run_id=? AND kind='event'
       ON CONFLICT(id) DO NOTHING`,job.id));

@@ -394,7 +394,83 @@ async function exactReach(env,start,end,scope={}){
 }
 
 
+// src/crm-snapshot.js
+
+const kinds=new Set(['contact','contact_stage','conversation']);
+const snapshotKey='crmContactSnapshotV1';
+const order=(a,b)=>a<b?-1:a>b?1:0;
+
+// Parse compact pages in the Worker. SQL json_each/window intermediates used to
+// charge thousands of reads while the stored snapshot occupied only ~40 rows.
+// Legacy item rows remain readable during a rolling deployment.
+async function readCrmSnapshot(db,runId,kind){
+  if(!kinds.has(kind))throw new Error('CRM_SNAPSHOT_KIND_BLOCKED');
+  const rows=await all(db,'SELECT kind,key,data FROM stage WHERE run_id=? AND kind IN(?,?) ORDER BY kind,key',runId,kind,kind+'_page');
+  const items=new Map();
+  for(const row of rows){
+    const data=JSON.parse(row.data);
+    const page=row.kind===kind?[{key:row.key,data}]:data;
+    if(!Array.isArray(page))throw new Error('CRM_SNAPSHOT_SCHEMA_MISMATCH');
+    for(const item of page){
+      if(typeof item?.key!=='string'||!item.data||typeof item.data!=='object')throw new Error('CRM_SNAPSHOT_SCHEMA_MISMATCH');
+      const previous=items.get(item.key);
+      items.set(item.key,kind==='contact'?{...item.data,undated:!!(previous?.undated||item.data.undated)}:item.data);
+    }
+  }
+  return items;
+}
+
+async function contactDeltaStatements(db,runId,at){
+  const [contacts,stages,cached]=await Promise.all([
+    readCrmSnapshot(db,runId,'contact'),readCrmSnapshot(db,runId,'contact_stage'),
+    first(db,'SELECT value FROM settings WHERE key=?',snapshotKey)
+  ]);
+  const byContact=new Map();
+  for(const stage of stages.values()){
+    if(!byContact.has(stage.contactId))byContact.set(stage.contactId,new Map());
+    byContact.get(stage.contactId).set(stage.stageId,stage.stageName);
+  }
+  const current=[...contacts].sort(([a],[b])=>order(a,b)).map(([id,contact])=>{
+    const assigned=[...(byContact.get(id)||[])].sort(([a],[b])=>order(a,b));
+    return [id,assigned.length?assigned.map(([key])=>key).join(','):contact.stageId||null,
+      assigned.length?[...new Set(assigned.map(([,name])=>name))].join(','):contact.stageName||'Etapa não informada',Number(!!contact.undated)];
+  });
+  const serialized=JSON.stringify(current);
+  if(cached?.value===serialized)return [];
+  let previous;
+  try{
+    previous=cached?JSON.parse(cached.value):null;
+    if(previous&&!Array.isArray(previous))previous=null;
+    if(previous?.some(row=>!Array.isArray(row)||row.length!==4||typeof row[0]!=='string'))previous=null;
+  }catch{previous=null;}
+  // Bootstrap once from confirmed data. Oversized caches use this safe path;
+  // they never lose coverage or exceed D1's per-value limit.
+  if(!previous)previous=(await all(db,'SELECT id,stage_id,stage_name,undated FROM contacts')).map(row=>[row.id,row.stage_id,row.stage_name,Number(row.undated)]);
+  const before=new Map(previous.map(row=>[row[0],row])),ids=new Set(current.map(row=>row[0]));
+  const changed=current.filter(row=>JSON.stringify(before.get(row[0]))!==JSON.stringify(row));
+  const removed=previous.filter(row=>!ids.has(row[0])&&(row[1]!==null||row[2]!=='Etapa não informada')).map(row=>row[0]);
+  const statements=[];
+  const chunks=[];let chunk=[],bytes=2;
+  for(const row of changed){
+    const size=new TextEncoder().encode(JSON.stringify(row)).byteLength+1;
+    if(bytes+size>500000&&chunk.length){chunks.push(chunk);chunk=[];bytes=2;}
+    chunk.push(row);bytes+=size;
+  }
+  if(chunk.length)chunks.push(chunk);
+  for(const rows of chunks)statements.push(statement(db,`INSERT INTO contacts(id,stage_id,stage_name,undated,updated_at)
+    SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]'),json_extract(value,'$[2]'),json_extract(value,'$[3]'),? FROM json_each(?) WHERE true
+    ON CONFLICT(id) DO UPDATE SET stage_id=excluded.stage_id,stage_name=excluded.stage_name,undated=MAX(contacts.undated,excluded.undated),updated_at=excluded.updated_at
+    WHERE contacts.stage_id IS NOT excluded.stage_id OR contacts.stage_name IS NOT excluded.stage_name OR contacts.undated<excluded.undated`,at,JSON.stringify(rows)));
+  if(removed.length)statements.push(statement(db,`UPDATE contacts SET stage_id=NULL,stage_name='Etapa não informada'
+    WHERE id IN(SELECT value FROM json_each(?)) AND (stage_id IS NOT NULL OR stage_name<>'Etapa não informada')`,JSON.stringify(removed)));
+  if(new TextEncoder().encode(serialized).byteLength<1500000)statements.push(statement(db,`INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE settings.value IS NOT excluded.value`,snapshotKey,serialized));
+  else if(cached)statements.push(statement(db,'DELETE FROM settings WHERE key=?',snapshotKey));
+  return statements;
+}
+
+
 // src/sync.js
+
 
 
 
@@ -471,7 +547,7 @@ async function crmStep(env,job,c) {
     await stagePage(db,job.id,'contact',job.pages,contacts.map(contact=>({key:contact.id,data:contact})));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
-    const unique=await first(db,`SELECT count(*) n FROM (${stagedKeysSQL('contact')})`,job.id,job.id);
+    const unique={n:(await readCrmSnapshot(db,job.id,'contact')).size};
     if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONTACT_COVERAGE_INCOMPLETE');
     return {phase:'conversations',page:1,count:0};
   }
@@ -502,7 +578,7 @@ async function crmStep(env,job,c) {
     await stagePage(db,job.id,'contact_stage',job.pages,conversations.flatMap(conv=>conv.stages.map(current=>({key:current.contactId+':'+current.stageId,data:current}))));
     const count=c.count+p.items.length;
     if(p.next)return {...c,total:p.total,count,page:p.next};
-    const unique=await first(db,`SELECT count(*) n FROM (${stagedKeysSQL('conversation')})`,job.id,job.id);
+    const unique={n:(await readCrmSnapshot(db,job.id,'conversation')).size};
     if(unique.n!==p.total||count<p.total||(!spec.allowDuplicateIds&&count!==p.total))throw new Error('CRM_CONVERSATION_COVERAGE_INCOMPLETE');
     return {phase:'messages',conversationAfter:'',messageCursor:null};
   }
@@ -564,17 +640,7 @@ async function metaStep(env,job,c){
 async function publishRun(env,job,c){
   const db=env.ECCOA_DB,at=new Date().toISOString(),stmts=[];
   if(job.provider==='crm'){
-    const contactRows=stagedRowsSQL('contact'),stageRows=stagedRowsSQL('contact_stage');
-    stmts.push(statement(db,`UPDATE contacts SET stage_id=NULL,stage_name='Etapa não informada'
-      WHERE (stage_id IS NOT NULL OR stage_name<>'Etapa não informada') AND id NOT IN(${stagedKeysSQL('contact')})`,job.id,job.id));
-    stmts.push(statement(db,`WITH incoming AS (${contactRows}),stages AS (${stageRows}),
-      grouped AS (SELECT json_extract(data,'$.contactId') contact_id,group_concat(DISTINCT json_extract(data,'$.stageId')) stage_id,
-      group_concat(DISTINCT json_extract(data,'$.stageName')) stage_name FROM stages GROUP BY json_extract(data,'$.contactId'))
-      INSERT INTO contacts(id,stage_id,stage_name,undated,updated_at)
-      SELECT i.key,COALESCE(g.stage_id,json_extract(i.data,'$.stageId')),COALESCE(g.stage_name,json_extract(i.data,'$.stageName'),'Etapa não informada'),json_extract(i.data,'$.undated'),?
-      FROM incoming i LEFT JOIN grouped g ON g.contact_id=i.key WHERE true
-      ON CONFLICT(id) DO UPDATE SET stage_id=excluded.stage_id,stage_name=excluded.stage_name,undated=excluded.undated,updated_at=excluded.updated_at
-      WHERE contacts.stage_id IS NOT excluded.stage_id OR contacts.stage_name IS NOT excluded.stage_name OR contacts.undated IS NOT excluded.undated`,job.id,job.id,job.id,job.id,at));
+    stmts.push(...await contactDeltaStatements(db,job.id,at));
     stmts.push(statement(db,`INSERT INTO events(id,contact_id,at,day,campaign_id,adset_id,ad_id,evidence)
       SELECT key,json_extract(data,'$.contactId'),json_extract(data,'$.at'),json_extract(data,'$.day'),json_extract(data,'$.campaignId'),json_extract(data,'$.adsetId'),json_extract(data,'$.adId'),json_extract(data,'$.evidence') FROM stage WHERE run_id=? AND kind='event'
       ON CONFLICT(id) DO NOTHING`,job.id));
