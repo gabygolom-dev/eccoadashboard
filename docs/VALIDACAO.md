@@ -60,3 +60,9 @@ Amostra de uso no painel D1 durante a validação: cerca de **2,77 milhões de l
 - Alcance de um novo escopo pode ficar indisponível até o próximo ciclo; o valor de outro escopo não é reaproveitado.
 - Alterações históricas do CRM sem mudança nos marcadores operacionais podem depender da revisão integral diária.
 - Renove tokens no Worker e preserve a chave de pseudonimização. Consulte [manutenção Cloudflare](CLOUDFLARE.md) e [contratos e renovação dos tokens](INTEGRACOES.md). Alterações no Worker separado exigem publicar o bundle atualizado pelo editor Cloudflare; o GitHub publica automaticamente o Pages.
+
+## Revisão de cotas — 11/11/2026
+
+Atualização publicada com **45 testes aprovados**, mantendo Cron de 15 minutos e plano gratuito. Comparação de snapshots CRM no Worker e compactação de metadados de anúncios Meta reduziram varreduras e gravações temporárias. Worker ativo `baaae448`.
+
+Ciclo automático com o dashboard fechado: Meta confirmada às **09:01:21**, CRM às **09:03:13**, em São Paulo, sem erros. Preservados 3.627 contatos, 264 eventos e 38 anúncios. Em duas janelas de cinco minutos com um ciclo completo, os gráficos Row Metrics passaram de 47,6 mil para 9,55 mil leituras e de 538 para 461 gravações. Essa amostra não representa economia diária garantida. Método, limites e manutenção em [redução do consumo D1](OTIMIZACAO-COTAS.md).

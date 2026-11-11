@@ -79,12 +79,14 @@ test('Meta compacta anúncios por página e cria fallback somente para IDs ausen
   await db.prepare("INSERT INTO runs(id,provider,state,cursor_json,started_at) VALUES(?,'meta','running',?,?)").bind(id,JSON.stringify({phase:'ads',after:null,start:'2026-11-09',end:'2026-11-09'}),new Date().toISOString()).run();
   await db.prepare("UPDATE sources SET active_run=? WHERE provider='meta'").bind(id).run();
   await stage(db,id,'identity','meta',{conversationsValidated:true});
+  await db.prepare("INSERT INTO reach_reports(id,start,end,campaign_id,ad_id,requested_at) VALUES('compact_reach','2026-11-09','2026-11-09','c','ad_0','2026-11-09T10:00:00Z')").run();
   const local={...env,ECCOA_DB:db,ECCOA_JOBS:{async send(body){queue.push(body);}}};
   const body={runId:id,provider:'meta'};queue.push(body);
   await withFetch(async(url,options)=>{
    assert.equal(options.method,'GET');const path=new URL(url).pathname;
    if(path.endsWith('/ads'))return response({data:current});
    assert.ok(path.endsWith('/insights'));
+   if(new URL(url).searchParams.get('fields').split(',').includes('reach'))return response({data:[{account_id:ECCOA_META.accountId,campaign_id:'c',ad_id:'ad_0',reach:'123',date_start:'2026-11-09',date_stop:'2026-11-09'}]});
    return response({data:['ad_0','historical'].map(ad=>({account_id:ECCOA_META.accountId,ad_id:ad,ad_name:'Histórico '+ad,adset_id:'s',adset_name:'Conjunto',campaign_id:'c',campaign_name:'Campanha',date_start:'2026-11-09',date_stop:'2026-11-09',spend:'10',impressions:'100',inline_link_clicks:'5',actions:[{action_type:ECCOA_META.conversationAction,value:'2'}]}))});
   },async()=>{let steps=0;while(queue.length){assert.ok(++steps<10);await processJob(local,queue.shift());}});
   assert.equal((await db.prepare('SELECT state FROM runs WHERE id=?').bind(id).first()).state,'completed');
@@ -93,6 +95,8 @@ test('Meta compacta anúncios por página e cria fallback somente para IDs ausen
   const real=JSON.parse((await db.prepare("SELECT data FROM ads WHERE id='ad_0'").first()).data);
   assert.equal(real.name,'Atual 0');assert.equal(real.format,'VIDEO');assert.equal(real.status,'ACTIVE');
   assert.equal((await db.prepare('SELECT count(*) n FROM ads').first()).n,39);
+  const reach=await db.prepare("SELECT value,error FROM reach_reports WHERE id='compact_reach'").first();
+  assert.equal(reach.value,123);assert.equal(reach.error,null);
   assert.equal((await db.prepare('SELECT sum(json_extract(data,\'$.spend\')) n FROM metrics').first()).n,20);
  }finally{db.close();}
 });
