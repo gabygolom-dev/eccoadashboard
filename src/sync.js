@@ -135,14 +135,15 @@ async function metaStep(env,job,c){
   }
   if(c.phase==='ads'){
     const p=await adsPage(env,c.after);
-    await stageMany(db,job.id,'ad',p.items.map(ad=>({key:ad.id,data:ad})));
+    await stagePage(db,job.id,'ad',job.pages,p.items.map(ad=>({key:ad.id,data:ad})));
+    const knownAdIds=[...new Set([...(c.knownAdIds||[]),...p.items.map(ad=>ad.id)])];
     if(p.next===c.after&&p.next)throw new Error('META_REPEATED_CURSOR');
-    return p.next?{...c,after:p.next}:{...c,phase:'insights',windowStart:c.start,windowEnd:[addDays(c.start,6),c.end].sort()[0],after:null};
+    return p.next?{...c,knownAdIds,after:p.next}:{...c,knownAdIds,phase:'insights',windowStart:c.start,windowEnd:[addDays(c.start,6),c.end].sort()[0],after:null};
   }
   if(c.phase==='insights'){
     const p=await insightPage(env,c.windowStart,c.windowEnd,c.after);
     await stagePage(db,job.id,'metric',job.pages,p.items.map(metric=>({key:`${metric.day}:${metric.adId}`,data:metric})));
-    await stageMissingAds(db,job.id,p.items);
+    await stageMissingAds(db,job.id,p.items.filter(metric=>!c.knownAdIds?.includes(metric.adId)));
     if(p.next===c.after&&p.next)throw new Error('META_REPEATED_CURSOR');
     if(p.next)return {...c,after:p.next};
     if(c.windowEnd===c.end)return {...c,phase:'reach',reachAfter:'',reachCount:0};
@@ -155,7 +156,7 @@ async function metaStep(env,job,c){
     let value=null,error=null;
     try{
       if(request.ad_id||request.campaign_id){
-        const scope=await first(db,`SELECT 1 found FROM stage WHERE run_id=? AND kind='ad' AND (? IS NULL OR key=?) AND (? IS NULL OR json_extract(data,'$.campaignId')=?) LIMIT 1`,job.id,request.ad_id,request.ad_id,request.campaign_id,request.campaign_id);
+        const scope=await first(db,`SELECT 1 found FROM (${stagedRowsSQL('ad')}) WHERE (? IS NULL OR key=?) AND (? IS NULL OR json_extract(data,'$.campaignId')=?) LIMIT 1`,job.id,job.id,request.ad_id,request.ad_id,request.campaign_id,request.campaign_id);
         if(!scope)throw new Error('META_REACH_SCOPE_UNVERIFIED');
       }
       value=await exactReach(env,request.start,request.end,{campaign:request.campaign_id,ad:request.ad_id});
@@ -179,8 +180,8 @@ export async function publishRun(env,job,c){
       AND json_extract(data,'$.fingerprint') IS NOT NULL AND (json_extract(data,'$.needsMessages')=1 OR json_extract(data,'$.bootstrap')=1)
       ON CONFLICT(conversation_id) DO UPDATE SET fingerprint=excluded.fingerprint,full_scan_at=excluded.full_scan_at`,job.id,job.id));
   }else{
-    const metricRows=stagedRowsSQL('metric');
-    stmts.push(statement(db,`INSERT INTO ads(id,data) SELECT key,data FROM stage WHERE run_id=? AND kind='ad' ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE ads.data IS NOT excluded.data`,job.id));
+    const metricRows=stagedRowsSQL('metric'),adRows=stagedRowsSQL('ad');
+    stmts.push(statement(db,`WITH incoming AS (${adRows}) INSERT INTO ads(id,data) SELECT key,data FROM incoming WHERE true ON CONFLICT(id) DO UPDATE SET data=excluded.data WHERE ads.data IS NOT excluded.data`,job.id,job.id));
     stmts.push(statement(db,`UPDATE reach_reports SET value=COALESCE((SELECT json_extract(data,'$.value') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id),value),confirmed_at=CASE WHEN (SELECT json_extract(data,'$.value') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id) IS NOT NULL THEN ? ELSE confirmed_at END,error=(SELECT json_extract(data,'$.error') FROM stage WHERE run_id=? AND kind='reach' AND key=reach_reports.id) WHERE id IN(SELECT key FROM stage WHERE run_id=? AND kind='reach')`,job.id,job.id,at,job.id,job.id));
     stmts.push(statement(db,`WITH incoming AS (${metricRows})
       INSERT INTO metric_revisions(run_id,day,ad_id,data,confirmed_at)

@@ -23,11 +23,12 @@ Mesmo sem alterações, a expansão de páginas JSON no SQLite, o agrupamento e 
 - Com mudanças: somente os IDs alterados são enviados ao banco. Cadastros que saíram da listagem perdem apenas a etapa atual, preservando IDs e eventos históricos.
 - O snapshot contém apenas IDs pseudonimizados, etapas do dicionário validado e indicação de origem paga. Confirmação da fonte, contatos e cache avançam na mesma transação; falhas preservam o estado anterior.
 - A primeira execução inicializa o cache a partir dos dados confirmados. Um cache maior que 1,5 MB usa comparação direta com os dados confirmados, respeitando o limite de valor do banco.
+- Metadados de anúncios Meta também usam snapshots por página. IDs já consultados na listagem não geram registros temporários individuais de fallback; referências históricas ausentes continuam preservadas. O agrupamento não altera nomes, status, formatos, IDs ou métricas.
 - Evidência histórica de origem paga sem data não é removida pela simples ausência do sinal numa reimportação posterior.
 
 ## Verificação
 
-43 testes passaram, além de sintaxe, build e bundle do Worker. Foram exercitados:
+45 testes passaram, além de sintaxe, build e bundle do Worker. Foram exercitados:
 
 - 4.000 contatos estáveis: 41 linhas de páginas compactas retornadas na preparação, sem consulta à tabela inteira de contatos e sem instrução de regravação. Essa medição local não é uma medição de cobrança D1.
 - Dados legados e páginas novas, IDs repetidos e união do sinal pago.
@@ -35,6 +36,7 @@ Mesmo sem alterações, a expansão de páginas JSON no SQLite, o agrupamento e 
 - Mudança real de etapa, cadastro ausente e preservação de evidência sem data.
 - Falha transacional sem avanço do cache.
 - Cache acima do limite com comparação segura e sem perda de contatos.
+- Importação Meta com 38 anúncios em uma página temporária, referência histórica ausente e compatibilidade com snapshots legados.
 
 A medição em produção deve comparar ciclos concluídos da nova versão. O total diário anterior inclui carga histórica e versões antigas. Não extrapolar uma redução percentual dos testes locais para o dia inteiro.
 

@@ -6,7 +6,7 @@ export async function stage(db,runId,kind,key,data) {
   await run(db,'INSERT INTO stage(run_id,kind,key,data) VALUES(?,?,?,?) ON CONFLICT(run_id,kind,key) DO UPDATE SET data=excluded.data',runId,kind,key,JSON.stringify(data));
 }
 
-const snapshotKinds=new Set(['contact','contact_stage','conversation','metric']);
+const snapshotKinds=new Set(['contact','contact_stage','conversation','metric','ad']);
 export async function stagePage(db,runId,kind,sequence,items){
   if(!snapshotKinds.has(kind)||!Number.isSafeInteger(sequence)||sequence<0)throw new Error('STAGE_PAGE_CONFIGURATION');
   await stage(db,runId,kind+'_page',String(sequence).padStart(10,'0'),items);

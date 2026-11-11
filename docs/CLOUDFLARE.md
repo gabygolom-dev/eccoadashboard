@@ -94,6 +94,8 @@ A infraestrutura tem custos e limites da conta Cloudflare. Nenhum recurso de out
 
 O cliente escolheu manter o plano gratuito. Ele tem limite de 50 consultas D1 por execução, 5 milhões de linhas lidas e 100 mil linhas escritas por dia e 10 mil operações de fila por dia. A implementação usa snapshots temporários por página, confirmação apenas dos cadastros e métricas que mudaram, cache de versões de conversas e lotes limitados de processamento. Leituras de contatos sem data e de histórico usam índices específicos.
 
+Metadados Meta usam páginas compactas de anúncios; referências que aparecem apenas no histórico recebem fallback separado, sem sobrescrever metadados atuais.
+
 A confirmação dos contatos compara um snapshot canônico de IDs pseudonimizados, etapas e indicação de origem paga. As páginas temporárias são lidas como linhas compactas e deduplicadas no Worker, evitando expandir milhares de itens no SQLite para repetir a mesma contagem. Todas as páginas da API continuam sendo consultadas e a cobertura continua sendo exigida antes de confirmar.
 
 O cache `settings.crmContactSnapshotV1` é atualizado na mesma transação dos contatos e da confirmação da fonte. Sem mudanças, não há revarredura da tabela inteira nem regravação do cache. Com mudanças, apenas os IDs alterados são enviados ao banco. Um cadastro ausente da listagem perde apenas a etapa atual; eventos e IDs históricos permanecem. A primeira execução compara com a base confirmada para inicializar o cache. Se o cache ultrapassar 1,5 MB, a aplicação compara diretamente com os dados confirmados, sem ultrapassar o limite de valor do D1. Nenhuma migração ou novo secret é necessário para essa otimização.

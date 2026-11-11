@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {metaRead,adsPage,insightPage,exactReach} from '../src/connectors/meta.js';
 import {ECCOA_META} from '../src/connectors/meta-schema.js';
 import {createDB} from '../scripts/local-db.mjs';
-import {stage,stageMany,stageMissingAds} from '../src/db.js';
-import {publishRun} from '../src/sync.js';
+import {stage,stageMany,stageMissingAds,stagePage,stagedRowsSQL} from '../src/db.js';
+import {publishRun,processJob} from '../src/sync.js';
 import {makeReport} from '../src/report.js';
 import {digest} from '../src/domain.js';
 const env={META_TOKEN:'test-only-meta-token',META_ACCOUNT_ID:ECCOA_META.accountId,META_ACCOUNT_NAME:ECCOA_META.accountName,META_API_VERSION:ECCOA_META.apiVersion,META_CONVERSATION_ACTION:ECCOA_META.conversationAction,META_METRIC_VALIDATED:'true',HISTORY_START:'2025-12-01'};
@@ -69,5 +69,39 @@ test('falha na escrita opcional de alcance mantém métricas confirmadas dispon�
   const report=await makeReport({ECCOA_DB:readOnlyDB},new URL('https://test/api/report?start=2026-11-09&end=2026-11-09'));
   assert.equal(report.metaAvailable,true);assert.equal(report.totals.spend,25);assert.equal(report.totals.conversations,3);
   assert.equal(report.totals.reach,null);assert.equal(report.reachError,'REACH_REQUEST_REGISTRATION_FAILED');
+ }finally{db.close();}
+});
+
+test('Meta compacta anúncios por página e cria fallback somente para IDs ausentes',async()=>{
+ const db=createDB(),queue=[],id=crypto.randomUUID();
+ const current=Array.from({length:38},(_,i)=>({id:'ad_'+i,account_id:ECCOA_META.accountId,name:'Atual '+i,effective_status:'ACTIVE',campaign:{id:'c',name:'Campanha'},adset:{id:'s',name:'Conjunto'},creative:{object_type:'VIDEO'}}));
+ try{
+  await db.prepare("INSERT INTO runs(id,provider,state,cursor_json,started_at) VALUES(?,'meta','running',?,?)").bind(id,JSON.stringify({phase:'ads',after:null,start:'2026-11-09',end:'2026-11-09'}),new Date().toISOString()).run();
+  await db.prepare("UPDATE sources SET active_run=? WHERE provider='meta'").bind(id).run();
+  await stage(db,id,'identity','meta',{conversationsValidated:true});
+  const local={...env,ECCOA_DB:db,ECCOA_JOBS:{async send(body){queue.push(body);}}};
+  const body={runId:id,provider:'meta'};queue.push(body);
+  await withFetch(async(url,options)=>{
+   assert.equal(options.method,'GET');const path=new URL(url).pathname;
+   if(path.endsWith('/ads'))return response({data:current});
+   assert.ok(path.endsWith('/insights'));
+   return response({data:['ad_0','historical'].map(ad=>({account_id:ECCOA_META.accountId,ad_id:ad,ad_name:'Histórico '+ad,adset_id:'s',adset_name:'Conjunto',campaign_id:'c',campaign_name:'Campanha',date_start:'2026-11-09',date_stop:'2026-11-09',spend:'10',impressions:'100',inline_link_clicks:'5',actions:[{action_type:ECCOA_META.conversationAction,value:'2'}]}))});
+  },async()=>{let steps=0;while(queue.length){assert.ok(++steps<10);await processJob(local,queue.shift());}});
+  assert.equal((await db.prepare('SELECT state FROM runs WHERE id=?').bind(id).first()).state,'completed');
+  assert.equal((await db.prepare("SELECT count(*) n FROM stage WHERE run_id=? AND kind='ad_page'").bind(id).first()).n,1);
+  assert.equal((await db.prepare("SELECT count(*) n FROM stage WHERE run_id=? AND kind='ad'").bind(id).first()).n,1);
+  const real=JSON.parse((await db.prepare("SELECT data FROM ads WHERE id='ad_0'").first()).data);
+  assert.equal(real.name,'Atual 0');assert.equal(real.format,'VIDEO');assert.equal(real.status,'ACTIVE');
+  assert.equal((await db.prepare('SELECT count(*) n FROM ads').first()).n,39);
+  assert.equal((await db.prepare('SELECT sum(json_extract(data,\'$.spend\')) n FROM metrics').first()).n,20);
+ }finally{db.close();}
+});
+
+test('metadados compactos atuais vencem fallback legado durante atualização de versão',async()=>{
+ const db=createDB();try{
+  await stageMissingAds(db,'rolling',[{adId:'a',adName:'Histórico',campaignId:'c',adsetId:'s'}]);
+  await stagePage(db,'rolling','ad',2,[{key:'a',data:{id:'a',name:'Atual',campaignId:'c',adsetId:'s',status:'PAUSED',format:'IMAGE'}}]);
+  const rows=(await db.prepare(stagedRowsSQL('ad')).bind('rolling','rolling').all()).results;
+  assert.equal(rows.length,1);assert.equal(JSON.parse(rows[0].data).name,'Atual');assert.equal(JSON.parse(rows[0].data).status,'PAUSED');
  }finally{db.close();}
 });
